@@ -158,7 +158,7 @@ def preprocess(
             categorical_cols = pkl.load(f)
         with open(top_categories_dict_path, "rb") as f:
             top_categories_dict = pkl.load(f)
-            print(top_categories_dict)  # Debug print to verify loaded categories
+            # print(top_categories_dict)  # Debug print to verify loaded categories
         for col in categorical_cols:
             top_categories = top_categories_dict[col]
             test_features[col] = test_features[col].where(
@@ -773,12 +773,12 @@ def run_training_pipeline():
         rowID = str(row)
         if rowID not in recommendations:
             recommendations[rowID] = recommend_action(row)
-            if i % 10 == 0:
+            if i % 1 == 0:
                 with open(recommendation_cache_file, "wb") as f:
                     pkl.dump(recommendations, f)
         print("Recommended " + str(recommendations[rowID]) + "\nfor " + rowID)
-    with open(recommendation_cache_file, "wb") as f:
-        pkl.dump(recommendations, f)
+    # with open(recommendation_cache_file, "wb") as f:
+    #     pkl.dump(recommendations, f)
 
 
 run_training_pipeline()
