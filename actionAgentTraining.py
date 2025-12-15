@@ -559,13 +559,118 @@ def determine_liquidation_risk(row: pd.Series):
     return is_at_risk, most_recent_predictions, trend_slopes
 
 
+def generate_next_transaction(
+    prev_row: pd.Series, action_type: str, amount=10.0, time_delta_seconds=600
+):
+    """
+    Generates a new transaction row 'soon after' the previous row.
+    Updates time features and cumulative user stats.
+
+    Args:
+        prev_row (pd.Series): The 'Index Event' row to build upon.
+        action_type (str): The new action, e.g., 'Deposit' or 'Repay'.
+        amount (float): The amount for the new transaction.
+        time_delta_seconds (int): How many seconds after the previous row this occurs.
+
+    Returns:
+        pd.Series: The new, complete transaction row.
+    """
+    # 1. Initialize new row
+    new_row = prev_row.copy()
+    action = action_type.lower()
+
+    # 2. Update Identifiers
+    new_row["Index Event"] = action
+    new_row["type"] = action
+    new_row["Outcome Event"] = None  # As requested
+
+    # 3. Update Time
+    # Increment timestamp
+    prev_ts = new_row["timestamp"]
+    new_row["timestamp"] = prev_ts + time_delta_seconds
+
+    # Update time intervals
+    new_row["timeDiff"] = time_delta_seconds
+    new_row["userSecondsSincePreviousTransaction"] = time_delta_seconds
+    new_row["userSecondsSinceFirstTransaction"] += time_delta_seconds
+
+    # Update 'timeOfDay' (Assuming data is in hours 0-24)
+    hours_added = time_delta_seconds / 3600.0
+    new_time_of_day = (new_row["timeOfDay"] + hours_added) % 24
+    new_row["timeOfDay"] = new_time_of_day
+
+    # Recalculate Cyclical Time Features (to maintain model consistency)
+    # sin/cos TimeOfDay (Period: 24h)
+    new_row["sinTimeOfDay"] = np.sin(2 * np.pi * new_time_of_day / 24)
+    new_row["cosTimeOfDay"] = np.cos(2 * np.pi * new_time_of_day / 24)
+
+    # Check if we crossed a day boundary (simple approximation)
+    if new_time_of_day < (prev_row["timeOfDay"] + hours_added):
+        new_row["dayOfWeek"] = (new_row["dayOfWeek"] % 7) + 1
+        new_row["dayOfYear"] += 1
+        # Update day-based cyclicals
+        new_row["sinDayOfWeek"] = np.sin(2 * np.pi * new_row["dayOfWeek"] / 7)
+        new_row["cosDayOfWeek"] = np.cos(2 * np.pi * new_row["dayOfWeek"] / 7)
+        new_row["sinDayOfYear"] = np.sin(2 * np.pi * new_row["dayOfYear"] / 365)
+        new_row["cosDayOfYear"] = np.cos(2 * np.pi * new_row["dayOfYear"] / 365)
+
+    # 4. Update Amount
+    new_row["amount"] = amount
+    new_row["logAmount"] = np.log1p(amount)
+
+    # Calculate USD Amount (assuming price is static for the short interval)
+    price = new_row["priceInUSD"]
+    amount_usd = amount * price
+    new_row["amountUSD"] = amount_usd
+    new_row["logAmountUSD"] = np.log1p(amount_usd)
+
+    # 5. Update Cumulative User Stats
+    # These specific columns track the user's history
+    if action == "deposit":
+        new_row["userDepositCount"] += 1
+        new_row["userDepositSum"] += amount
+        new_row["userDepositSumUSD"] += amount_usd
+
+        # Recalculate Averages
+        if new_row["userDepositCount"] > 0:
+            new_row["userDepositAvgAmount"] = (
+                new_row["userDepositSum"] / new_row["userDepositCount"]
+            )
+            new_row["userDepositAvgAmountUSD"] = (
+                new_row["userDepositSumUSD"] / new_row["userDepositCount"]
+            )
+
+    elif action == "repay":
+        new_row["userRepayCount"] += 1
+        new_row["userRepaySum"] += amount
+        new_row["userRepaySumUSD"] += amount_usd
+
+        if new_row["userRepayCount"] > 0:
+            new_row["userRepayAvgAmount"] = (
+                new_row["userRepaySum"] / new_row["userRepayCount"]
+            )
+            new_row["userRepayAvgAmountUSD"] = (
+                new_row["userRepaySumUSD"] / new_row["userRepayCount"]
+            )
+
+    # Note: 'Borrow' stats generally don't change on a 'Repay' action
+    # (BorrowSum usually tracks total borrowed volume, not current debt balance).
+
+    return new_row
+
+
 def optimize_recommendation(row: pd.Series, recommended_action: str):
-    new_action = row.copy()
-    new_action["timestamp"] += 600  # Add 10 minute buffer
-    new_action["amount"] = 10
+    new_action = generate_next_transaction(
+        row, recommended_action, amount=10, time_delta_seconds=600
+    )
     while determine_liquidation_risk(new_action)[0]:
-        new_action["amount"] *= 2
-        print(new_action["amount"])
+        new_action = generate_next_transaction(
+            row,
+            recommended_action,
+            amount=new_action["amount"] * 2,
+            time_delta_seconds=600,
+        )
+        print("Increased amount to:", new_action["amount"])
     return new_action
 
 
@@ -612,16 +717,27 @@ def get_train_set():
                     "r",
                 ) as f:
                     df = pd.read_csv(f)
-                    train_set = pd.concat(
-                        [
-                            train_set,
-                            df[
-                                (df["timestamp"] >= min_train_date)
-                                & (df["timestamp"] < max_train_date)
-                            ].sample(n=100, random_state=seed),
-                        ],
-                        ignore_index=True,
-                    )
+                print(f"Processing {index_event}->{outcome_event}")
+                print(f"Data has {len(df)} rows")
+                print(f"Min timestamp: {df['timestamp'].min()}")
+                print(f"Max timestamp: {df['timestamp'].max()}")
+                subsetInRange = df[
+                    (df["timestamp"] >= min_train_date)
+                    & (df["timestamp"] < max_train_date)
+                ]
+                print(
+                    f"Loaded {len(subsetInRange)} rows for {index_event}->{outcome_event}"
+                )
+                train_set = pd.concat(
+                    [
+                        train_set,
+                        df[
+                            (df["timestamp"] >= min_train_date)
+                            & (df["timestamp"] < max_train_date)
+                        ].sample(n=100, random_state=seed),
+                    ],
+                    ignore_index=True,
+                )
         with open(train_set_dir, "w") as f:
             train_set.to_csv(f, index=False)
     return train_set
