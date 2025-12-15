@@ -379,8 +379,9 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
     dates = train_dates.union(test_dates)
 
     user_history = get_user_history(
-        user_id=row["user"], up_to_timestamp=row["timestamp"]
+        user_id=row["user"], up_to_timestamp=row["timestamp"] - 1
     )
+    user_history = pd.concat([user_history, row.to_frame().T]).reset_index(drop=True)
 
     model_date = dates[dates <= pd.to_datetime(row["timestamp"], unit="s")].max()
     for _, history_row in user_history.iterrows():
@@ -540,6 +541,12 @@ def determine_liquidation_risk(row: pd.Series):
     ]
     if most_recent_predictions["Liquidated"] >= max(most_recent_predictions.values()):
         is_at_risk = True
+        print(
+            "Liquidation Risk Immediate: "
+            + str(most_recent_predictions["Liquidated"])
+            + " >= "
+            + str(most_recent_predictions.values())
+        )
     else:
         trend_slopes = {
             outcome_event: calculate_trend_slope(
@@ -553,9 +560,19 @@ def determine_liquidation_risk(row: pd.Series):
                 sorted(predict_transaction_history.keys(), reverse=True)[0]
             ].keys()
         }
-        if trend_slopes["Liquidated"] >= max(trend_slopes.values()):
+        if trend_slopes["Liquidated"] > 0 and trend_slopes["Liquidated"] >= max(
+            trend_slopes.values()
+        ):
             is_at_risk = True
+            print(
+                "Liquidation Risk Gradual: "
+                + str(trend_slopes["Liquidated"])
+                + " >= "
+                + str(trend_slopes.values())
+            )
 
+    if not is_at_risk:
+        print("No Liquidation Risk.")
     return is_at_risk, most_recent_predictions, trend_slopes
 
 
@@ -661,14 +678,15 @@ def generate_next_transaction(
 
 def optimize_recommendation(row: pd.Series, recommended_action: str):
     new_action = generate_next_transaction(
-        row, recommended_action, amount=10, time_delta_seconds=600
+        row,
+        recommended_action,
+        amount=10,
     )
     while determine_liquidation_risk(new_action)[0]:
         new_action = generate_next_transaction(
             row,
             recommended_action,
             amount=new_action["amount"] * 2,
-            time_delta_seconds=600,
         )
         print("Increased amount to:", new_action["amount"])
     return new_action
@@ -744,20 +762,23 @@ def get_train_set():
 
 
 def run_training_pipeline():
-    recommendation_cache_file = os.path.join(CACHE_DIR, "recommendations.json")
+    recommendation_cache_file = os.path.join(CACHE_DIR, "recommendations.pkl")
     if os.path.exists(recommendation_cache_file):
-        with open(recommendation_cache_file, "r") as f:
-            recommendations = json.load(f)
+        with open(recommendation_cache_file, "rb") as f:
+            recommendations = pkl.load(f)
     else:
         recommendations = {}
     train_set = get_train_set()
     for i, row in train_set.iterrows():
-        recommendations[row] = recommend_action(row)
-        if i % 10 == 0:
-            with open(recommendation_cache_file, "w") as f:
-                json.dump(recommendations, f)
-    with open(recommendation_cache_file, "w") as f:
-        json.dump(recommendations, f)
+        rowID = str(row)
+        if rowID not in recommendations:
+            recommendations[rowID] = recommend_action(row)
+            if i % 10 == 0:
+                with open(recommendation_cache_file, "wb") as f:
+                    pkl.dump(recommendations, f)
+        print("Recommended " + str(recommendations[rowID]) + "\nfor " + rowID)
+    with open(recommendation_cache_file, "wb") as f:
+        pkl.dump(recommendations, f)
 
 
 run_training_pipeline()
