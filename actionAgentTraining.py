@@ -367,8 +367,8 @@ def get_user_history(user_id: str, up_to_timestamp: int) -> pd.DataFrame:
 
 
 def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
-    results_cache_file = (
-        RESULTS_CACHE_DIR + f"{row['user']}_{row['timestamp']}_{row['amount']}.pkl"
+    results_cache_file = os.path.join(
+        RESULTS_CACHE_DIR, f"{row['user']}_{row['timestamp']}_{row['amount']}.pkl"
     )
     if os.path.exists(results_cache_file):
         with open(results_cache_file, "rb") as f:
@@ -390,6 +390,9 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
 
         index_event = history_row["Index Event"].title()
         for outcome_event in EVENTS:
+            if index_event == outcome_event and index_event == "Liquidated":
+                results[history_timestamp][outcome_event] = None
+                continue
             model = get_model_for_pair_and_date(
                 index_event, outcome_event, model_date=model_date, verbose=True
             )
@@ -429,34 +432,98 @@ def calculate_trend_slope(data):
                > 0 means increasing, < 0 means decreasing.
                Returns 0.0 if not enough data.
     """
-    if len(data) < 2:
+    """
+    Compute a robust, dimensionless trend-risk score for the provided
+    time-series `data` (mapping timestamps -> values). The returned value
+    is larger for stronger upward trends relative to recent volatility and
+    recent acceleration; negative values indicate downward tendency.
+
+    This keeps the same input contract and returns a single float so the
+    rest of the code can compare scores as before.
+    """
+
+    # Sort data by timestamp and normalize times to start at 0 to avoid
+    # precision issues with large epoch timestamps.
+    sorted_items = [
+        item
+        for item in sorted(data.items())
+        if item[1] is not None and np.isfinite(item[1])
+    ]
+    if len(sorted_items) < 2:
         return 0.0
-
-    # 1. Sort data by timestamp (keys)
-    sorted_items = sorted(data.items())
-
-    # 2. Extract x (timestamps) and y (values)
-    # We subtract the first timestamp from all x values to normalize them
-    # (starts at time 0). This prevents precision errors with large timestamps.
     start_time = sorted_items[0][0]
-    xs = [x - start_time for x, _ in sorted_items]
-    ys = [y for _, y in sorted_items]
+    print(sorted_items)
+    xs = np.array([float(x - start_time) for x, _ in sorted_items], dtype=float)
+    ys = np.array([float(y) for _, y in sorted_items], dtype=float)
 
-    # 3. Calculate means
     n = len(xs)
-    mean_x = sum(xs) / n
-    mean_y = sum(ys) / n
+    eps = 1e-8
 
-    # 4. Calculate Slope (m) using Least Squares method
-    # Formula: m = sum((x - mean_x) * (y - mean_y)) / sum((x - mean_x)^2)
-    numerator = sum((xi - mean_x) * (yi - mean_y) for xi, yi in zip(xs, ys))
-    denominator = sum((xi - mean_x) ** 2 for xi in xs)
+    # Full-series least squares slope (y per unit time)
+    mean_x = xs.mean()
+    mean_y = ys.mean()
+    print(mean_x, mean_y)
+    num = ((xs - mean_x) * (ys - mean_y)).sum()
+    den = ((xs - mean_x) ** 2).sum()
+    slope = float(num / den) if den != 0 else 0.0
 
-    if denominator == 0:
-        return 0.0  # Vertical line (all timestamps are the same)
+    # Predicted values and residuals to estimate volatility
+    y_pred = slope * (xs - mean_x) + mean_y
+    residuals = ys - y_pred
+    y_std = float(ys.std(ddof=0))
+    res_std = float(residuals.std(ddof=0))
 
-    slope = numerator / denominator
-    return slope
+    # Make slope dimensionless by scaling with time span and y variability.
+    time_span = float(xs[-1] - xs[0]) if xs[-1] - xs[0] > 0 else 1.0
+    slope_z = slope * time_span / (y_std + eps)
+
+    # Recent slope (last half of points, at least 2) to capture short-term
+    # acceleration relative to the past slope.
+    k = max(2, n // 2)
+    recent_xs = xs[-k:]
+    recent_ys = ys[-k:]
+    mean_rx = recent_xs.mean()
+    mean_ry = recent_ys.mean()
+    num_r = ((recent_xs - mean_rx) * (recent_ys - mean_ry)).sum()
+    den_r = ((recent_xs - mean_rx) ** 2).sum()
+    recent_slope = float(num_r / den_r) if den_r != 0 else 0.0
+    recent_time_span = (
+        float(recent_xs[-1] - recent_xs[0]) if recent_xs[-1] - recent_xs[0] > 0 else 1.0
+    )
+    recent_slope_z = recent_slope * recent_time_span / (y_std + eps)
+
+    # Past slope (first segment) when we have enough points; otherwise reuse
+    # the full-series normalized slope.
+    if n >= 4 and (n - k) >= 2:
+        past_xs = xs[: n - k]
+        past_ys = ys[: n - k]
+        mean_px = past_xs.mean()
+        mean_py = past_ys.mean()
+        num_p = ((past_xs - mean_px) * (past_ys - mean_py)).sum()
+        den_p = ((past_xs - mean_px) ** 2).sum()
+        past_slope = float(num_p / den_p) if den_p != 0 else 0.0
+        past_time_span = (
+            float(past_xs[-1] - past_xs[0]) if past_xs[-1] - past_xs[0] > 0 else 1.0
+        )
+        past_slope_z = past_slope * past_time_span / (y_std + eps)
+    else:
+        past_slope_z = slope_z
+
+    # Acceleration (dimensionless)
+    acceleration_z = recent_slope_z - past_slope_z
+
+    # Normalize volatility relative to the series amplitude
+    volatility_norm = res_std / (y_std + eps)
+
+    # Combine into a single score: base normalized slope, boosted by
+    # recent acceleration, penalized by volatility. We also slightly
+    # amplify when the last value is above the mean (momentum).
+    score = slope_z + 0.8 * acceleration_z - 0.6 * volatility_norm
+
+    last_rel = (ys[-1] - mean_y) / (abs(mean_y) + eps)
+    score = score * (1.0 + 0.3 * last_rel)
+
+    return float(score)
 
 
 def determine_liquidation_risk(row: pd.Series):
@@ -482,7 +549,9 @@ def determine_liquidation_risk(row: pd.Series):
                     if preds and outcome_event in preds
                 }
             )
-            for outcome_event in predict_transaction_history[-1].keys()
+            for outcome_event in predict_transaction_history[
+                sorted(predict_transaction_history.keys(), reverse=True)[0]
+            ].keys()
         }
         if trend_slopes["Liquidated"] >= max(trend_slopes.values()):
             is_at_risk = True
