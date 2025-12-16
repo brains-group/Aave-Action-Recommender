@@ -1,0 +1,3 @@
+[submodule "Aave-Simulator"]
+	path = Aave-Simulator
+	url = git@github.com:brains-group/Aave-Simulator.git
