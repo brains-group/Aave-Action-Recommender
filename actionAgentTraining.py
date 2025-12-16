@@ -18,20 +18,10 @@ import pyreadr
 import json
 
 # %%
-DATA_PATH = "./data/"
-CACHE_DIR = "./cache/"
-os.makedirs(CACHE_DIR, exist_ok=True)
-MODEL_CACHE_DIR = os.path.join(CACHE_DIR, "models")
-os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
-DATA_CACHE_DIR = os.path.join(CACHE_DIR, "data")
-os.makedirs(DATA_CACHE_DIR, exist_ok=True)
-RESULTS_CACHE_DIR = os.path.join(CACHE_DIR, "results")
-os.makedirs(RESULTS_CACHE_DIR, exist_ok=True)
+from utils.constants import *
 
 seed = 42
 np.random.seed(seed)
-
-EVENTS = ["Deposit", "Withdraw", "Repay", "Borrow", "Liquidated"]
 
 
 # %%
@@ -762,7 +752,7 @@ def get_train_set():
 
 
 def run_training_pipeline():
-    recommendation_cache_file = os.path.join(CACHE_DIR, "recommendations.pkl")
+    recommendation_cache_file = RECOMMENDATIONS_FILE
     if os.path.exists(recommendation_cache_file):
         with open(recommendation_cache_file, "rb") as f:
             recommendations = pkl.load(f)
