@@ -1,4 +1,5 @@
 import os
+import json
 
 DATA_PATH = "./data/"
 CACHE_DIR = "./cache/"
@@ -14,6 +15,7 @@ EVENTS = ["Deposit", "Withdraw", "Repay", "Borrow", "Liquidated"]
 
 RECOMMENDATIONS_FILE = os.path.join(CACHE_DIR, "recommendations.pkl")
 
-PROFILES_DIR = "./Aave-Simulator/results/profile-generation/"
+with open("./Aave-Simulator/config.json", 'r') as f:
+    PROFILES_DIR = json.load(f)["sample_user_profile_path"]
 PROFILE_CACHE_DIR = os.path.join(CACHE_DIR, "profile_backups")
 os.makedirs(PROFILE_CACHE_DIR, exist_ok=True)
