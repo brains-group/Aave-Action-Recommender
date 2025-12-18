@@ -531,6 +531,7 @@ def determine_liquidation_risk(row: pd.Series):
     ]
     if most_recent_predictions["Liquidated"] >= max(most_recent_predictions.values()):
         is_at_risk = True
+        trend_slopes = None
         print(
             "Liquidation Risk Immediate: "
             + str(most_recent_predictions["Liquidated"])
