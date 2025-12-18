@@ -21,11 +21,11 @@ from profile_gen.user_profile_generator import UserProfileGenerator
 from profile_gen.wallet_inference import WalletInferencer
 import main as simulator
 
-# Return any previously leftover profiles
-for filename in os.listdir(PROFILE_CACHE_DIR):
-    shutil.move(
-        os.path.join(PROFILE_CACHE_DIR, filename), os.path.expanduser(os.path.join(PROFILES_DIR, filename))
-    )
+# # Return any previously leftover profiles
+# for filename in os.listdir(PROFILE_CACHE_DIR):
+#     shutil.move(
+#         os.path.join(PROFILE_CACHE_DIR, filename), os.path.expanduser(os.path.join(PROFILES_DIR, filename))
+#     )
 
 with open(RECOMMENDATIONS_FILE, "rb") as f:
     recommendations = pkl.load(f)
@@ -39,10 +39,10 @@ for recommendation in recommendations.values():
     if not os.path.exists(user_profile_file):
         print(f"Did not find profile for {user} ({user_profile_file}). Skipping...")
         continue
-    user_profile_cache = os.path.join(PROFILE_CACHE_DIR, user_filename)
     with open(user_profile_file, "r") as f:
         user_profile = json.load(f)
-    shutil.move(user_profile_file, user_profile_cache)
+    # user_profile_cache = os.path.join(PROFILE_CACHE_DIR, user_filename)
+    # shutil.move(user_profile_file, user_profile_cache)
 
     user_transactions = user_profile["transactions"]
     user_transactions = [
@@ -53,10 +53,12 @@ for recommendation in recommendations.values():
     user_transactions.append(user_profile_generator._row_to_transaction(recommendation))
     user_profile["transactions"] = user_transactions
 
-    with open(user_profile_file, "w") as f:
+    userProfilePath = os.path.join(PROFILE_CACHE_DIR, user)
+    os.makedirs(userProfilePath, exist_ok=True)
+    with open(os.path.join(userProfilePath, user_filename), "w") as f:
         json.dump(user_profile, f, indent=2)
 
-    simulator.main()
+    simulator.main({"sample_user_profile_path": userProfilePath})
 
-    # Return original profile
-    shutil.move(user_profile_cache, user_profile_file)
+    # # Return original profile
+    # shutil.move(user_profile_cache, user_profile_file)
