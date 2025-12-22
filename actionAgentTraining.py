@@ -16,12 +16,38 @@ import pickle as pkl
 from itertools import chain
 import pyreadr
 import json
+from tqdm import tqdm
 
 # %%
 from utils.constants import *
 
 seed = 42
 np.random.seed(seed)
+
+# In-memory cache for event CSV dataframes to avoid repeated disk I/O
+EVENT_DF_CACHE: dict = {}
+
+
+def get_event_df(index_event: str, outcome_event: str) -> Optional[pd.DataFrame]:
+    """Return cached DataFrame for an event pair, loading it once if needed.
+
+    Returns None if the CSV does not exist.
+    """
+    key = (index_event, outcome_event)
+    if key in EVENT_DF_CACHE:
+        return EVENT_DF_CACHE[key]
+    event_path = os.path.join(DATA_PATH, index_event, outcome_event, "data.csv")
+    if not os.path.exists(event_path):
+        EVENT_DF_CACHE[key] = None
+        return None
+    try:
+        df = pd.read_csv(event_path)
+    except Exception as e:
+        print(f"Warning: failed to read {event_path}: {e}")
+        EVENT_DF_CACHE[key] = None
+        return None
+    EVENT_DF_CACHE[key] = df
+    return df
 
 
 # %%
@@ -230,7 +256,10 @@ def get_model_for_pair_and_date(
     # --- Load and Preprocess ---
     if verbose:
         print(f"Loading data from {os.path.join(DATA_PATH, dataset_path, 'data.csv')}")
-    train_df = pd.read_csv(os.path.join(DATA_PATH, dataset_path, "data.csv"))
+    train_df = get_event_df(index_event, outcome_event)
+    if train_df is None:
+        print(f"No training data found for {dataset_path}")
+        return None
 
     X_train, y_train, _ = preprocess(train_df, model_date=model_date)
 
@@ -283,7 +312,9 @@ def train_models_for_all_event_pairs(
         for event_pair in sub_event_pairs
     ]
 
-    for index_event, outcome_event in event_pairs:
+    for index_event, outcome_event in tqdm(
+        event_pairs, desc="Training event pairs", leave=False
+    ):
         if index_event == outcome_event and index_event == "Liquidated":
             continue
         if verbose:
@@ -331,8 +362,9 @@ def get_user_history(user_id: str, up_to_timestamp: int) -> pd.DataFrame:
     for index_event in EVENTS:
         for outcome_event in EVENTS:
             event_path = os.path.join(DATA_PATH, index_event, outcome_event, "data.csv")
-            if os.path.exists(event_path):
-                event_df = pd.read_csv(event_path)
+            # use cached loader
+            event_df = get_event_df(index_event, outcome_event)
+            if not (event_df is None):
                 user_events = event_df[
                     (event_df["user"] == user_id)
                     & (event_df["timestamp"] <= up_to_timestamp)
@@ -364,6 +396,7 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
         with open(results_cache_file, "rb") as f:
             return pkl.load(f)
 
+    # Build cache-aware, batched prediction: group history rows by Index Event
     results = {}
     train_dates, test_dates = get_date_ranges()
     dates = train_dates.union(test_dates)
@@ -374,32 +407,76 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
     user_history = pd.concat([user_history, row.to_frame().T]).reset_index(drop=True)
 
     model_date = dates[dates <= pd.to_datetime(row["timestamp"], unit="s")].max()
-    for _, history_row in user_history.iterrows():
-        history_timestamp = history_row["timestamp"]
-        results[history_timestamp] = {}
-        history_row = history_row.copy()
 
-        index_event = history_row["Index Event"].title()
-        for outcome_event in EVENTS:
-            if index_event == outcome_event and index_event == "Liquidated":
-                results[history_timestamp][outcome_event] = None
+    # initialize results structure for each timestamp
+    for ts in user_history["timestamp"]:
+        results[int(ts)] = {}
+
+    # cache loaded models to avoid repeated loads/training
+    models_cache = {}
+
+    # Group by original Index Event to preprocess/predict in batches
+    grouped = list(user_history.groupby("Index Event"))
+    for index_event_value, group in tqdm(
+        grouped, desc="IndexEvent groups", leave=False
+    ):
+        # use title-case when requesting model (keeps previous behavior)
+        index_event_title = str(index_event_value).title()
+
+        # For each possible outcome, preprocess the whole group once and predict
+        for outcome_event in tqdm(
+            EVENTS, desc=f"{index_event_title} -> outcomes", leave=False
+        ):
+            # Skip invalid liquidated->liquidated pairs (preserve previous behavior)
+            if index_event_title == outcome_event and index_event_title == "Liquidated":
+                for ts in group["timestamp"]:
+                    results[int(ts)][outcome_event] = None
                 continue
-            model = get_model_for_pair_and_date(
-                index_event, outcome_event, model_date=model_date, verbose=True
-            )
+
+            model_key = (index_event_title, outcome_event, str(model_date))
+            if model_key in models_cache:
+                model = models_cache[model_key]
+            else:
+                model = get_model_for_pair_and_date(
+                    index_event_title,
+                    outcome_event,
+                    model_date=model_date,
+                    verbose=True,
+                )
+                models_cache[model_key] = model
 
             if model is None:
-                results[history_timestamp][outcome_event] = None
+                for ts in group["timestamp"]:
+                    results[int(ts)][outcome_event] = None
                 continue
 
-            history_row["Outcome Event"] = outcome_event.lower()
+            # Prepare a copy of the group's rows with the requested Outcome Event
+            test_df = group.copy()
+            test_df["Outcome Event"] = outcome_event.lower()
+
+            # Preprocess the entire group's test features at once
             _, _, test_features = preprocess(
-                test_features_df=history_row.to_frame().T,
-                model_date=model_date,
+                test_features_df=test_df, model_date=model_date
             )
 
-            prediction = model.predict(test_features)
-            results[history_timestamp][outcome_event] = prediction[0]
+            if test_features is None or test_features.shape[0] == 0:
+                for ts in group["timestamp"]:
+                    results[int(ts)][outcome_event] = None
+                continue
+
+            # Predict in batch and map predictions back to timestamps
+            try:
+                preds = model.predict(test_features)
+            except Exception:
+                # If prediction fails for any reason, mark as None
+                for ts in group["timestamp"]:
+                    results[int(ts)][outcome_event] = None
+                continue
+
+            # Align by index: test_features.index corresponds to rows in user_history
+            for idx_i, pred in zip(test_features.index, preds):
+                ts = int(user_history.loc[idx_i, "timestamp"])
+                results[ts][outcome_event] = float(pred)
 
     with open(
         results_cache_file,
@@ -712,41 +789,35 @@ def get_train_set():
         train_ranges, test_ranges = get_date_ranges()
         min_train_date = train_ranges[0].timestamp()
         max_train_date = test_ranges[0].timestamp()
-        for index_event in EVENTS:
-            if index_event == "Liquidated":
+        event_pairs = [
+            (ie, oe) for ie in EVENTS for oe in EVENTS if not (ie == oe == "Liquidated")
+        ]
+        for index_event, outcome_event in tqdm(
+            event_pairs, desc="Building train_set", leave=False
+        ):
+            df = get_event_df(index_event, outcome_event)
+            if df is None:
                 continue
-            for outcome_event in EVENTS:
-                with open(
-                    os.path.join(
-                        DATA_PATH,
-                        index_event,
-                        outcome_event,
-                        "data.csv",
-                    ),
-                    "r",
-                ) as f:
-                    df = pd.read_csv(f)
-                print(f"Processing {index_event}->{outcome_event}")
-                print(f"Data has {len(df)} rows")
-                print(f"Min timestamp: {df['timestamp'].min()}")
-                print(f"Max timestamp: {df['timestamp'].max()}")
-                subsetInRange = df[
-                    (df["timestamp"] >= min_train_date)
-                    & (df["timestamp"] < max_train_date)
-                ]
-                print(
-                    f"Loaded {len(subsetInRange)} rows for {index_event}->{outcome_event}"
-                )
-                train_set = pd.concat(
-                    [
-                        train_set,
-                        df[
-                            (df["timestamp"] >= min_train_date)
-                            & (df["timestamp"] < max_train_date)
-                        ].sample(n=100, random_state=seed),
-                    ],
-                    ignore_index=True,
-                )
+            print(f"Processing {index_event}->{outcome_event}")
+            print(f"Data has {len(df)} rows")
+            print(f"Min timestamp: {df['timestamp'].min()}")
+            print(f"Max timestamp: {df['timestamp'].max()}")
+            subsetInRange = df[
+                (df["timestamp"] >= min_train_date) & (df["timestamp"] < max_train_date)
+            ]
+            print(
+                f"Loaded {len(subsetInRange)} rows for {index_event}->{outcome_event}"
+            )
+            train_set = pd.concat(
+                [
+                    train_set,
+                    df[
+                        (df["timestamp"] >= min_train_date)
+                        & (df["timestamp"] < max_train_date)
+                    ].sample(n=100, random_state=seed),
+                ],
+                ignore_index=True,
+            )
         with open(train_set_dir, "w") as f:
             train_set.to_csv(f, index=False)
     return train_set
@@ -760,7 +831,10 @@ def run_training_pipeline():
     else:
         recommendations = {}
     train_set = get_train_set()
-    for i, row in train_set.iterrows():
+    for i, row in tqdm(
+        train_set.iterrows(), total=train_set.shape[0], desc="Testing recommendations"
+    ):
+        print("Processing row " + str(i))
         rowID = str(row)
         if rowID not in recommendations:
             recommendations[rowID] = recommend_action(row)
