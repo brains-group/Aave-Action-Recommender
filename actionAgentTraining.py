@@ -14,9 +14,46 @@ from sklearn.preprocessing import StandardScaler
 from typing import Tuple, Optional
 import pickle as pkl
 from itertools import chain
+import glob
 import pyreadr
 import json
-from tqdm import tqdm
+import logging
+
+# Module logger
+logger = logging.getLogger(__name__)
+# File handler: capture all log levels to file
+_file_handler = logging.FileHandler("output7.log")
+_file_handler.setLevel(logging.DEBUG)
+_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+logger.addHandler(_file_handler)
+# # Console handler: show INFO+ by default
+# _console_handler = logging.StreamHandler()
+# _console_handler.setLevel(logging.INFO)
+# _console_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+# logger.addHandler(_console_handler)
+# Ensure logger forwards all levels to handlers (file will receive DEBUG+)
+logger.setLevel(logging.DEBUG)
+
+
+def set_log_file(path: str, file_level: str | int = "DEBUG"):
+    """Change the log file path and level. File will receive all levels at or above file_level."""
+    # remove old file handler
+    global _file_handler
+    try:
+        logger.removeHandler(_file_handler)
+    except Exception:
+        pass
+    _file_handler = logging.FileHandler(path)
+    if isinstance(file_level, str):
+        lvl = getattr(logging, file_level.upper(), logging.DEBUG)
+    else:
+        lvl = int(file_level)
+    _file_handler.setLevel(lvl)
+    _file_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    )
+    logger.addHandler(_file_handler)
+
 
 # %%
 from utils.constants import *
@@ -43,7 +80,7 @@ def get_event_df(index_event: str, outcome_event: str) -> Optional[pd.DataFrame]
     try:
         df = pd.read_csv(event_path)
     except Exception as e:
-        print(f"Warning: failed to read {event_path}: {e}")
+        logger.warning(f"Warning: failed to read {event_path}: {e}")
         EVENT_DF_CACHE[key] = None
         return None
     EVENT_DF_CACHE[key] = df
@@ -52,6 +89,10 @@ def get_event_df(index_event: str, outcome_event: str) -> Optional[pd.DataFrame]
 
 # Module-level cache for loaded/trained models to reuse across calls
 MODELS_CACHE: dict = {}
+
+
+# Module-level cache for preprocessing artifacts (scaler, columns, categories)
+PREPROCESS_CACHE: dict = {}
 
 
 # %%
@@ -167,18 +208,40 @@ def preprocess(
             pkl.dump(numerical_cols, f)
         with open(cols_to_keep_path, "wb") as f:
             pkl.dump(cols_to_keep, f)
+
+        # Populate in-memory preprocess cache for fast reuse
+        PREPROCESS_CACHE[unique_prefix] = {
+            "scaler": scaler,
+            "train_cols": train_features_encoded.columns,
+            "top_categories_dict": top_categories_dict,
+            "categorical_cols": categorical_cols,
+            "numerical_cols": numerical_cols,
+            "cols_to_keep": cols_to_keep,
+        }
     else:
         train_features_final = None
         train_targets = None
 
     # Process test features if provided
     if test_features_df is not None:
+        if unique_prefix not in PREPROCESS_CACHE:
+            PREPROCESS_CACHE[unique_prefix] = {}
+            with open(categorical_cols_path, "rb") as f:
+                PREPROCESS_CACHE[unique_prefix]["categorical_cols"] = pkl.load(f)
+            with open(top_categories_dict_path, "rb") as f:
+                PREPROCESS_CACHE[unique_prefix]["top_categories_dict"] = pkl.load(f)
+            with open(numerical_cols_path, "rb") as f:
+                PREPROCESS_CACHE[unique_prefix]["numerical_cols"] = pkl.load(f)
+            with open(cols_to_keep_path, "rb") as f:
+                PREPROCESS_CACHE[unique_prefix]["cols_to_keep"] = pkl.load(f)
+            with open(train_cols, "rb") as f:
+                PREPROCESS_CACHE[unique_prefix]["train_cols"] = pkl.load(f)
+            with open(scaler_path, "rb") as f:
+                PREPROCESS_CACHE[unique_prefix]["scaler"] = pkl.load(f)
+
         test_features = test_features_df.drop(columns=cols_to_drop, errors="ignore")
-        with open(categorical_cols_path, "rb") as f:
-            categorical_cols = pkl.load(f)
-        with open(top_categories_dict_path, "rb") as f:
-            top_categories_dict = pkl.load(f)
-            # print(top_categories_dict)  # Debug print to verify loaded categories
+        categorical_cols = PREPROCESS_CACHE[unique_prefix]["categorical_cols"]
+        top_categories_dict = PREPROCESS_CACHE[unique_prefix]["top_categories_dict"]
         for col in categorical_cols:
             top_categories = top_categories_dict[col]
             test_features[col] = test_features[col].where(
@@ -187,23 +250,20 @@ def preprocess(
         test_features_encoded = pd.get_dummies(
             test_features, columns=categorical_cols, dummy_na=True, drop_first=True
         )
-        with open(train_cols, "rb") as f:
-            train_cols = pkl.load(f)
+        train_cols = PREPROCESS_CACHE[unique_prefix]["train_cols"]
         test_features_aligned = test_features_encoded.reindex(
             columns=train_cols, fill_value=0
         )
-        with open(scaler_path, "rb") as f:
-            scaler = pkl.load(f)
-        with open(numerical_cols_path, "rb") as f:
-            numerical_cols = pkl.load(f)
+        scaler = PREPROCESS_CACHE[unique_prefix]["scaler"]
+        numerical_cols = PREPROCESS_CACHE[unique_prefix]["numerical_cols"]
         test_features_scaled = scaler.transform(test_features_aligned[numerical_cols])
         test_features_final = pd.DataFrame(
             test_features_scaled,
             index=test_features_aligned.index,
             columns=numerical_cols,
         ).fillna(0)
-        with open(cols_to_keep_path, "rb") as f:
-            cols_to_keep = pkl.load(f)
+        cols_to_keep = PREPROCESS_CACHE[unique_prefix]["cols_to_keep"]
+        # logger.debug("cols_to_keep:%s", cols_to_keep)
         test_processed_features = test_features_final[cols_to_keep]
     else:
         test_processed_features = None
@@ -248,15 +308,15 @@ def get_model_for_pair_and_date(
     # If model file exists, try to load into the estimator and return the estimator
     if os.path.exists(model_path):
         if verbose:
-            print(f"Loading existing model from {model_path}")
+            logger.info(f"Loading existing model from {model_path}")
         try:
             model.load_model(model_path)
             if verbose:
-                print(f"model loaded from {model_path}")
+                logger.info(f"model loaded from {model_path}")
             MODELS_CACHE[model_key] = model
             return model
         except Exception as e:
-            print(
+            logger.warning(
                 f"Warning: failed to load model from {model_path}: {e}. Will retrain."
             )
 
@@ -264,10 +324,12 @@ def get_model_for_pair_and_date(
 
     # --- Load and Preprocess ---
     if verbose:
-        print(f"Loading data from {os.path.join(DATA_PATH, dataset_path, 'data.csv')}")
+        logger.info(
+            f"Loading data from {os.path.join(DATA_PATH, dataset_path, 'data.csv')}"
+        )
     train_df = get_event_df(index_event, outcome_event)
     if train_df is None:
-        print(f"No training data found for {dataset_path}")
+        logger.warning(f"No training data found for {dataset_path}")
         MODELS_CACHE[model_key] = None
         return None
 
@@ -281,11 +343,11 @@ def get_model_for_pair_and_date(
     # Fit model: XGBoost Cox expects labels to be the event indicators
     # and the sample_weight to be the durations
     if verbose:
-        print("Training model...")
+        logger.info("Training model...")
     try:
         model.fit(X_train, y_train_event, sample_weight=y_train_duration)
     except Exception as e:
-        print(f"ERROR: Model training failed for {dataset_path}: {e}")
+        logger.error(f"ERROR: Model training failed for {dataset_path}: {e}")
         raise
 
     # Save model: try estimator's save_model, fall back to Booster.save_model
@@ -293,15 +355,15 @@ def get_model_for_pair_and_date(
         # XGBRegressor implements save_model; call it and confirm file created
         model.save_model(model_path)
         if verbose:
-            print(f"Model saved to {model_path}")
+            logger.info(f"Model saved to {model_path}")
     except Exception:
         try:
             booster = model.get_booster()
             booster.save_model(model_path)
             if verbose:
-                print(f"Model booster saved to {model_path}")
+                logger.info(f"Model booster saved to {model_path}")
         except Exception as e:
-            print(f"Warning: Failed to save model to {model_path}: {e}")
+            logger.warning(f"Warning: Failed to save model to {model_path}: {e}")
 
     # cache model (even if training produced a fitted estimator)
     MODELS_CACHE[model_key] = model
@@ -324,42 +386,49 @@ def train_models_for_all_event_pairs(
         for event_pair in sub_event_pairs
     ]
 
-    for index_event, outcome_event in tqdm(
-        event_pairs, desc="Training event pairs", leave=False
-    ):
+    total_pairs = len(event_pairs)
+    for pair_idx, (index_event, outcome_event) in enumerate(event_pairs, start=1):
         if index_event == outcome_event and index_event == "Liquidated":
             continue
         if verbose:
-            print(f"\n{'='*50}")
-            print(f"Training for: {index_event} -> {outcome_event}")
-            print(f"{'='*50}")
+            logger.info("\n" + "=" * 50)
+            logger.info(
+                f"Training event pair {pair_idx}/{total_pairs}: {index_event} -> {outcome_event}"
+            )
+            logger.info("" + "=" * 50)
 
         get_model_for_pair_and_date(
             index_event, outcome_event, model_date=model_date, verbose=verbose
         )
 
     if verbose:
-        print("\n\nAll prediction files have been generated.")
+        logger.info("\n\nAll prediction files have been generated.")
+
+
+DATE_RANGES_CACHE = None
 
 
 # %%
 def get_date_ranges():
     if os.path.exists(os.path.join(CACHE_DIR, "date_ranges.pkl")):
         with open(os.path.join(CACHE_DIR, "date_ranges.pkl"), "rb") as f:
-            return pkl.load(f)
+            DATE_RANGES_CACHE = pkl.load(f)
+    if DATE_RANGES_CACHE is not None:
+        return DATE_RANGES_CACHE
     transactions_df = pyreadr.read_r("./data/transactions.rds")[None]
     min_date = transactions_df["timestamp"].min() * 1e9
-    print(min_date)
+    logger.debug(f"min_date: {min_date}")
     max_date = transactions_df["timestamp"].max() * 1e9
-    print(max_date)
+    logger.debug(f"max_date: {max_date}")
     train_start_date = min_date + 0.4 * (max_date - min_date)
-    print(train_start_date)
+    logger.debug(f"train_start_date: {train_start_date}")
     test_start_date = min_date + 0.8 * (max_date - min_date)
-    print(test_start_date)
+    logger.debug(f"test_start_date: {test_start_date}")
     train_dates = pd.date_range(start=train_start_date, end=test_start_date, freq="2W")
     test_dates = pd.date_range(start=test_start_date, end=max_date, freq="2W")
     with open(os.path.join(CACHE_DIR, "date_ranges.pkl"), "wb") as f:
         pkl.dump((train_dates, test_dates), f)
+    DATE_RANGES_CACHE = (train_dates, test_dates)
     return train_dates, test_dates
 
 
@@ -389,10 +458,10 @@ def get_user_history(user_id: str, up_to_timestamp: int) -> pd.DataFrame:
                     & (user_events["Outcome Event"] == "liquidated")
                 ]
                 if liquidated_events.shape[0] > 0:
-                    print(
+                    logger.warning(
                         f"User {user_id} had liquidated->liquidated events in {index_event}->{outcome_event} before {up_to_timestamp}"
                     )
-                    print(liquidated_events)
+                    logger.debug("\n" + str(liquidated_events))
     if all_events:
         user_history_df = pd.concat(all_events).sort_values(by="timestamp")
     else:
@@ -404,12 +473,32 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
     results_cache_file = os.path.join(
         RESULTS_CACHE_DIR, f"{row['user']}_{row['timestamp']}_{row['amount']}.pkl"
     )
+    # If exact cache exists for this amount, return it immediately
     if os.path.exists(results_cache_file):
         with open(results_cache_file, "rb") as f:
             return pkl.load(f)
 
+    # Otherwise, check for any cache for the same user+timestamp (different amount).
+    # If found, we'll reuse that cache and only recompute the predictions for
+    # the most-recent transaction (the row passed in), then save a new cache
+    # file for the current amount.
+    pattern = os.path.join(RESULTS_CACHE_DIR, f"{row['user']}_{row['timestamp']}_*.pkl")
+    matches = glob.glob(pattern)
+    cached_results = None
+    if matches:
+        for m in matches:
+            try:
+                with open(m, "rb") as f:
+                    cached_results = pkl.load(f)
+                logger.debug("Loaded alternative cache %s for user/timestamp", m)
+                break
+            except Exception:
+                continue
+
     # Build cache-aware, batched prediction: group history rows by Index Event
-    results = {}
+    # If we loaded an alternative cache file above, start from that and only
+    # recompute the predictions for the most recent transaction (the row).
+    results = cached_results if cached_results is not None else {}
     train_dates, test_dates = get_date_ranges()
     dates = train_dates.union(test_dates)
 
@@ -420,22 +509,44 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
 
     model_date = dates[dates <= pd.to_datetime(row["timestamp"], unit="s")].max()
 
-    # initialize results structure for each timestamp
+    # initialize results structure for each timestamp (preserve existing cached keys)
     for ts in user_history["timestamp"]:
-        results[int(ts)] = {}
+        results.setdefault(int(ts), {})
 
     # Group by original Index Event to preprocess/predict in batches
     grouped = list(user_history.groupby("Index Event"))
-    for index_event_value, group in tqdm(
-        grouped, desc="IndexEvent groups", leave=False
-    ):
+    total_groups = len(grouped)
+    for group_idx, (index_event_value, group) in enumerate(grouped, start=1):
+        logger.debug(
+            "Processing IndexEvent group %s/%s: %s",
+            group_idx,
+            total_groups,
+            index_event_value,
+        )
         # use title-case when requesting model (keeps previous behavior)
         index_event_title = str(index_event_value).title()
 
+        # # If we loaded an alternative cache, only recompute groups that
+        # # contain the most-recent transaction (row). This avoids redoing work
+        # # for unchanged historical rows.
+        # if cached_results is not None:
+        #     if row["timestamp"] not in group["timestamp"].values:
+        #         logger.debug(
+        #             "Skipping group %s because it does not contain the latest row",
+        #             index_event_value,
+        #         )
+        #         continue
+
         # For each possible outcome, preprocess the whole group once and predict
-        for outcome_event in tqdm(
-            EVENTS, desc=f"{index_event_title} -> outcomes", leave=False
-        ):
+        total_outcomes = len(EVENTS)
+        for outcome_idx, outcome_event in enumerate(EVENTS, start=1):
+            logger.debug(
+                "%s -> outcome %s/%s: %s",
+                index_event_title,
+                outcome_idx,
+                total_outcomes,
+                outcome_event,
+            )
             # Skip invalid liquidated->liquidated pairs (preserve previous behavior)
             if index_event_title == outcome_event and index_event_title == "Liquidated":
                 for ts in group["timestamp"]:
@@ -523,7 +634,9 @@ def calculate_trend_slope(data):
     if len(sorted_items) < 2:
         return 0.0
     start_time = sorted_items[0][0]
-    print(sorted_items)
+    # debug: list of (timestamp, value) pairs
+    # logger = logging.getLogger(__name__)
+    # logger.debug(f"sorted_items: {sorted_items}")
     xs = np.array([float(x - start_time) for x, _ in sorted_items], dtype=float)
     ys = np.array([float(y) for _, y in sorted_items], dtype=float)
 
@@ -533,7 +646,7 @@ def calculate_trend_slope(data):
     # Full-series least squares slope (y per unit time)
     mean_x = xs.mean()
     mean_y = ys.mean()
-    print(mean_x, mean_y)
+    logger.debug(f"mean_x: {mean_x}, mean_y: {mean_y}")
     num = ((xs - mean_x) * (ys - mean_y)).sum()
     den = ((xs - mean_x) ** 2).sum()
     slope = float(num / den) if den != 0 else 0.0
@@ -612,11 +725,11 @@ def determine_liquidation_risk(row: pd.Series):
     if most_recent_predictions["Liquidated"] >= max(most_recent_predictions.values()):
         is_at_risk = True
         trend_slopes = None
-        print(
+        logger.info(
             "Liquidation Risk Immediate: "
             + str(most_recent_predictions["Liquidated"])
             + " >= "
-            + str(most_recent_predictions.values())
+            + str(list(most_recent_predictions.values()))
         )
     else:
         trend_slopes = {
@@ -635,15 +748,15 @@ def determine_liquidation_risk(row: pd.Series):
             trend_slopes.values()
         ):
             is_at_risk = True
-            print(
+            logger.info(
                 "Liquidation Risk Gradual: "
                 + str(trend_slopes["Liquidated"])
                 + " >= "
-                + str(trend_slopes.values())
+                + str(list(trend_slopes.values()))
             )
 
     if not is_at_risk:
-        print("No Liquidation Risk.")
+        logger.info("No Liquidation Risk.")
     return is_at_risk, most_recent_predictions, trend_slopes
 
 
@@ -753,13 +866,103 @@ def optimize_recommendation(row: pd.Series, recommended_action: str):
         recommended_action,
         amount=10,
     )
+    # Debug: compute single-action prediction before any adjustments
+    try:
+        train_dates, test_dates = get_date_ranges()
+        dates = train_dates.union(test_dates)
+        model_date = dates[
+            dates <= pd.to_datetime(new_action["timestamp"], unit="s")
+        ].max()
+        index_event_title = str(new_action["Index Event"]).title()
+        # load model for Liquidated outcome only and predict for this single row
+        model = get_model_for_pair_and_date(
+            index_event_title, "Liquidated", model_date=model_date, verbose=True
+        )
+        new_action_copy = new_action.copy()
+        new_action_copy["Outcome Event"] = "liquidated"
+        _, _, test_features = preprocess(
+            test_features_df=new_action_copy.to_frame().T, model_date=model_date
+        )
+        if (
+            model is not None
+            and test_features is not None
+            and test_features.shape[0] > 0
+        ):
+            try:
+                single_pred = float(model.predict(test_features)[0])
+                logger.info(
+                    "DEBUG: single-action initial pred %s->Liquidated amount=%s (%s in final features): %s",
+                    index_event_title,
+                    new_action["amount"],
+                    test_features["amount"],
+                    single_pred,
+                )
+            except Exception as e:
+                logger.exception("DEBUG: failed to run single-action predict: %s", e)
+        else:
+            logger.info(
+                "DEBUG: single-action pred unavailable; model=%s, features=%s",
+                model is not None,
+                None if test_features is None else test_features.shape,
+            )
+    except Exception:
+        logger.exception("DEBUG: error preparing single-action prediction")
+
+    # If risk remains, iteratively increase the amount and log single-action predictions
     while determine_liquidation_risk(new_action)[0]:
         new_action = generate_next_transaction(
             row,
             recommended_action,
             amount=new_action["amount"] * 2,
         )
-        print("Increased amount to:", new_action["amount"])
+        # logger = logging.getLogger(__name__)
+        logger.info("Increased amount to: %s", new_action["amount"])
+
+        # Debug: recompute single-action prediction after increasing amount
+        try:
+            train_dates, test_dates = get_date_ranges()
+            dates = train_dates.union(test_dates)
+            model_date = dates[
+                dates <= pd.to_datetime(new_action["timestamp"], unit="s")
+            ].max()
+            index_event_title = str(new_action["Index Event"]).title()
+            model = get_model_for_pair_and_date(
+                index_event_title, "Liquidated", model_date=model_date, verbose=True
+            )
+            new_action_copy = new_action.copy()
+            new_action_copy["Outcome Event"] = "liquidated"
+            _, _, test_features = preprocess(
+                test_features_df=new_action_copy.to_frame().T, model_date=model_date
+            )
+            if (
+                model is not None
+                and test_features is not None
+                and test_features.shape[0] > 0
+            ):
+                try:
+                    single_pred = float(model.predict(test_features)[0])
+                    logger.info(
+                        "DEBUG: single-action initial pred %s->Liquidated amount=%s (%s in final features): %s",
+                        index_event_title,
+                        new_action["amount"],
+                        test_features["amount"],
+                        single_pred,
+                    )
+                except Exception as e:
+                    logger.exception(
+                        "DEBUG: failed to run single-action predict after increase: %s",
+                        e,
+                    )
+            else:
+                logger.info(
+                    "DEBUG: single-action pred unavailable after increase; model=%s, features=%s",
+                    model is not None,
+                    None if test_features is None else test_features.shape,
+                )
+        except Exception:
+            logger.exception(
+                "DEBUG: error preparing single-action prediction after increase"
+            )
     return new_action
 
 
@@ -795,20 +998,23 @@ def get_train_set():
         event_pairs = [
             (ie, oe) for ie in EVENTS for oe in EVENTS if not (ie == oe == "Liquidated")
         ]
-        for index_event, outcome_event in tqdm(
-            event_pairs, desc="Building train_set", leave=False
-        ):
+        for index_event, outcome_event in event_pairs:
+            # log progress for building the train set
+            logger.info(
+                "Building train_set: processing %s->%s", index_event, outcome_event
+            )
             df = get_event_df(index_event, outcome_event)
             if df is None:
                 continue
-            print(f"Processing {index_event}->{outcome_event}")
-            print(f"Data has {len(df)} rows")
-            print(f"Min timestamp: {df['timestamp'].min()}")
-            print(f"Max timestamp: {df['timestamp'].max()}")
+            # logger = logging.getLogger(__name__)
+            logger.info(f"Processing {index_event}->{outcome_event}")
+            logger.debug(f"Data has {len(df)} rows")
+            logger.debug(f"Min timestamp: {df['timestamp'].min()}")
+            logger.debug(f"Max timestamp: {df['timestamp'].max()}")
             subsetInRange = df[
                 (df["timestamp"] >= min_train_date) & (df["timestamp"] < max_train_date)
             ]
-            print(
+            logger.debug(
                 f"Loaded {len(subsetInRange)} rows for {index_event}->{outcome_event}"
             )
             train_set = pd.concat(
@@ -834,17 +1040,17 @@ def run_training_pipeline():
     else:
         recommendations = {}
     train_set = get_train_set()
-    for i, row in tqdm(
-        train_set.iterrows(), total=train_set.shape[0], desc="Testing recommendations"
-    ):
-        print("Processing row " + str(i))
+    # with logging_redirect_tqdm():
+    total_rows = train_set.shape[0]
+    for iter_count, row in train_set.iterrows():
+        logger.debug("Processing row %s/%s", iter_count + 1, total_rows)
         rowID = str(row)
         if rowID not in recommendations:
             recommendations[rowID] = recommend_action(row)
-            if i % 1 == 0:
+            if iter_count % 1 == 0:
                 with open(recommendation_cache_file, "wb") as f:
                     pkl.dump(recommendations, f)
-        print("Recommended " + str(recommendations[rowID]) + "\nfor " + rowID)
+        logger.info("Recommended %s\nfor %s", str(recommendations[rowID]), rowID)
     # with open(recommendation_cache_file, "wb") as f:
     #     pkl.dump(recommendations, f)
 
