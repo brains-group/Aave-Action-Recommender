@@ -50,6 +50,10 @@ def get_event_df(index_event: str, outcome_event: str) -> Optional[pd.DataFrame]
     return df
 
 
+# Module-level cache for loaded/trained models to reuse across calls
+MODELS_CACHE: dict = {}
+
+
 # %%
 def preprocess(
     train_df_with_labels: Optional[pd.DataFrame] = None,
@@ -213,6 +217,10 @@ def get_model_for_pair_and_date(
     model_date: int | None = None,
     verbose: bool = False,
 ):
+    # Try module-level cache first
+    model_key = (index_event, outcome_event, str(model_date))
+    if model_key in MODELS_CACHE:
+        return MODELS_CACHE[model_key]
     # normalize model_date for filename
     model_date_str = str(model_date) if model_date is not None else "latest"
     model_filename = f"xgboost_cox_{index_event}_{outcome_event}_{model_date_str}.ubj"
@@ -245,6 +253,7 @@ def get_model_for_pair_and_date(
             model.load_model(model_path)
             if verbose:
                 print(f"model loaded from {model_path}")
+            MODELS_CACHE[model_key] = model
             return model
         except Exception as e:
             print(
@@ -259,6 +268,7 @@ def get_model_for_pair_and_date(
     train_df = get_event_df(index_event, outcome_event)
     if train_df is None:
         print(f"No training data found for {dataset_path}")
+        MODELS_CACHE[model_key] = None
         return None
 
     X_train, y_train, _ = preprocess(train_df, model_date=model_date)
@@ -293,6 +303,8 @@ def get_model_for_pair_and_date(
         except Exception as e:
             print(f"Warning: Failed to save model to {model_path}: {e}")
 
+    # cache model (even if training produced a fitted estimator)
+    MODELS_CACHE[model_key] = model
     return model
 
 
@@ -412,9 +424,6 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
     for ts in user_history["timestamp"]:
         results[int(ts)] = {}
 
-    # cache loaded models to avoid repeated loads/training
-    models_cache = {}
-
     # Group by original Index Event to preprocess/predict in batches
     grouped = list(user_history.groupby("Index Event"))
     for index_event_value, group in tqdm(
@@ -433,18 +442,12 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
                     results[int(ts)][outcome_event] = None
                 continue
 
-            model_key = (index_event_title, outcome_event, str(model_date))
-            if model_key in models_cache:
-                model = models_cache[model_key]
-            else:
-                model = get_model_for_pair_and_date(
-                    index_event_title,
-                    outcome_event,
-                    model_date=model_date,
-                    verbose=True,
-                )
-                models_cache[model_key] = model
-
+            model = get_model_for_pair_and_date(
+                index_event_title,
+                outcome_event,
+                model_date=model_date,
+                verbose=True,
+            )
             if model is None:
                 for ts in group["timestamp"]:
                     results[int(ts)][outcome_event] = None
