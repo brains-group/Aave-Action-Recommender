@@ -22,7 +22,7 @@ import logging
 # Module logger
 logger = logging.getLogger(__name__)
 # File handler: capture all log levels to file
-_file_handler = logging.FileHandler("output7.log")
+_file_handler = logging.FileHandler("output9.log")
 _file_handler.setLevel(logging.DEBUG)
 _file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
 logger.addHandler(_file_handler)
@@ -719,45 +719,46 @@ def determine_liquidation_risk(row: pd.Series):
 
     is_at_risk = False
 
-    most_recent_predictions = predict_transaction_history[
-        max(predict_transaction_history.keys())
-    ]
-    if most_recent_predictions["Liquidated"] >= max(most_recent_predictions.values()):
-        is_at_risk = True
-        trend_slopes = None
-        logger.info(
-            "Liquidation Risk Immediate: "
-            + str(most_recent_predictions["Liquidated"])
-            + " >= "
-            + str(list(most_recent_predictions.values()))
+    # most_recent_predictions = predict_transaction_history[
+    #     max(predict_transaction_history.keys())
+    # ]
+    # if most_recent_predictions["Liquidated"] >= max(most_recent_predictions.values()):
+    #     is_at_risk = True
+    #     trend_slopes = None
+    #     logger.info(
+    #         "Liquidation Risk Immediate: "
+    #         + str(most_recent_predictions["Liquidated"])
+    #         + " >= "
+    #         + str(list(most_recent_predictions.values()))
+    #     )
+    # else:
+    trend_slopes = {
+        outcome_event: calculate_trend_slope(
+            {
+                timestamp: preds[outcome_event]
+                for timestamp, preds in predict_transaction_history.items()
+                if preds and outcome_event in preds
+            }
         )
-    else:
-        trend_slopes = {
-            outcome_event: calculate_trend_slope(
-                {
-                    timestamp: preds[outcome_event]
-                    for timestamp, preds in predict_transaction_history.items()
-                    if preds and outcome_event in preds
-                }
-            )
-            for outcome_event in predict_transaction_history[
-                sorted(predict_transaction_history.keys(), reverse=True)[0]
-            ].keys()
-        }
-        if trend_slopes["Liquidated"] > 0 and trend_slopes["Liquidated"] >= max(
-            trend_slopes.values()
-        ):
-            is_at_risk = True
-            logger.info(
-                "Liquidation Risk Gradual: "
-                + str(trend_slopes["Liquidated"])
-                + " >= "
-                + str(list(trend_slopes.values()))
-            )
+        for outcome_event in predict_transaction_history[
+            sorted(predict_transaction_history.keys(), reverse=True)[0]
+        ].keys()
+    }
+    if trend_slopes["Liquidated"] > 0 and trend_slopes["Liquidated"] >= max(
+        trend_slopes.values()
+    ):
+        is_at_risk = True
+        logger.info(
+            "Liquidation Risk Gradual: "
+            + str(trend_slopes["Liquidated"])
+            + " >= "
+            + str(list(trend_slopes.values()))
+        )
 
     if not is_at_risk:
         logger.info("No Liquidation Risk.")
-    return is_at_risk, most_recent_predictions, trend_slopes
+    # return is_at_risk, most_recent_predictions, trend_slopes
+    return is_at_risk, trend_slopes
 
 
 def generate_next_transaction(
@@ -817,13 +818,26 @@ def generate_next_transaction(
 
     # 4. Update Amount
     new_row["amount"] = amount
-    new_row["logAmount"] = np.log1p(amount)
+    # Use numpy.log1p when available; fall back to math.log1p if `np` is shadowed.
+    try:
+        log1p_fn = np.log1p
+    except Exception:
+        import math
+
+        log1p_fn = math.log1p
+    new_row["logAmount"] = float(log1p_fn(float(amount)))
 
     # Calculate USD Amount (assuming price is static for the short interval)
     price = new_row["priceInUSD"]
     amount_usd = amount * price
     new_row["amountUSD"] = amount_usd
-    new_row["logAmountUSD"] = np.log1p(amount_usd)
+    try:
+        log1p_fn = np.log1p
+    except Exception:
+        import math
+
+        log1p_fn = math.log1p
+    new_row["logAmountUSD"] = float(log1p_fn(float(amount_usd)))
 
     # 5. Update Cumulative User Stats
     # These specific columns track the user's history
@@ -866,50 +880,70 @@ def optimize_recommendation(row: pd.Series, recommended_action: str):
         recommended_action,
         amount=10,
     )
-    # Debug: compute single-action prediction before any adjustments
-    try:
-        train_dates, test_dates = get_date_ranges()
-        dates = train_dates.union(test_dates)
-        model_date = dates[
-            dates <= pd.to_datetime(new_action["timestamp"], unit="s")
-        ].max()
-        index_event_title = str(new_action["Index Event"]).title()
-        # load model for Liquidated outcome only and predict for this single row
-        model = get_model_for_pair_and_date(
-            index_event_title, "Liquidated", model_date=model_date, verbose=True
-        )
-        new_action_copy = new_action.copy()
-        new_action_copy["Outcome Event"] = "liquidated"
-        _, _, test_features = preprocess(
-            test_features_df=new_action_copy.to_frame().T, model_date=model_date
-        )
-        if (
-            model is not None
-            and test_features is not None
-            and test_features.shape[0] > 0
-        ):
-            try:
-                single_pred = float(model.predict(test_features)[0])
-                logger.info(
-                    "DEBUG: single-action initial pred %s->Liquidated amount=%s (%s in final features): %s",
-                    index_event_title,
-                    new_action["amount"],
-                    test_features["amount"],
-                    single_pred,
-                )
-            except Exception as e:
-                logger.exception("DEBUG: failed to run single-action predict: %s", e)
-        else:
-            logger.info(
-                "DEBUG: single-action pred unavailable; model=%s, features=%s",
-                model is not None,
-                None if test_features is None else test_features.shape,
-            )
-    except Exception:
-        logger.exception("DEBUG: error preparing single-action prediction")
+    # # Debug: compute single-action prediction before any adjustments
+    # try:
+    #     train_dates, test_dates = get_date_ranges()
+    #     dates = train_dates.union(test_dates)
+    #     model_date = dates[
+    #         dates <= pd.to_datetime(new_action["timestamp"], unit="s")
+    #     ].max()
+    #     index_event_title = str(new_action["Index Event"]).title()
+    #     # load model for Liquidated outcome only and predict for this single row
+    #     logger.debug(
+    #         "Model parameters for function: %s, %s, %s",
+    #         index_event_title,
+    #         "Liquidated",
+    #         model_date,
+    #     )
+    #     model = get_model_for_pair_and_date(
+    #         index_event_title, "Liquidated", model_date=model_date, verbose=True
+    #     )
+    #     new_action_copy = new_action.copy()
+    #     new_action_copy["Outcome Event"] = "liquidated"
+    #     _, _, test_features = preprocess(
+    #         test_features_df=new_action_copy.to_frame().T, model_date=model_date
+    #     )
+    #     if (
+    #         model is not None
+    #         and test_features is not None
+    #         and test_features.shape[0] > 0
+    #     ):
+    #         try:
+    #             single_pred = float(model.predict(test_features)[0])
+    #             logger.info(
+    #                 "DEBUG: single-action initial pred %s->Liquidated amount=%s (%s in final features): %s",
+    #                 index_event_title,
+    #                 new_action["amount"],
+    #                 test_features["amount"],
+    #                 single_pred,
+    #             )
+    #         except Exception as e:
+    #             logger.exception("DEBUG: failed to run single-action predict: %s", e)
+    #         else:
+    #             # Verify whether 'amount' features actually influence predictions
+    #             try:
+    #                 ver = verify_amount_feature_effect(
+    #                     model,
+    #                     test_features,
+    #                     index_event=index_event_title,
+    #                     outcome_event="Liquidated",
+    #                     model_date=model_date,
+    #                     substrings=["marketWithdrawCount"],
+    #                 )
+    #                 logger.info("DEBUG: amount-influence check: %s", ver)
+    #             except Exception:
+    #                 logger.exception("DEBUG: amount-influence verification failed")
+    #     else:
+    #         logger.info(
+    #             "DEBUG: single-action pred unavailable; model=%s, features=%s",
+    #             model is not None,
+    #             None if test_features is None else test_features.shape,
+    #         )
+    # except Exception:
+    #     logger.exception("DEBUG: error preparing single-action prediction")
 
     # If risk remains, iteratively increase the amount and log single-action predictions
-    while determine_liquidation_risk(new_action)[0]:
+    while determine_liquidation_risk(new_action)[0] and new_action["amount"] < 100000:
         new_action = generate_next_transaction(
             row,
             recommended_action,
@@ -918,51 +952,68 @@ def optimize_recommendation(row: pd.Series, recommended_action: str):
         # logger = logging.getLogger(__name__)
         logger.info("Increased amount to: %s", new_action["amount"])
 
-        # Debug: recompute single-action prediction after increasing amount
-        try:
-            train_dates, test_dates = get_date_ranges()
-            dates = train_dates.union(test_dates)
-            model_date = dates[
-                dates <= pd.to_datetime(new_action["timestamp"], unit="s")
-            ].max()
-            index_event_title = str(new_action["Index Event"]).title()
-            model = get_model_for_pair_and_date(
-                index_event_title, "Liquidated", model_date=model_date, verbose=True
-            )
-            new_action_copy = new_action.copy()
-            new_action_copy["Outcome Event"] = "liquidated"
-            _, _, test_features = preprocess(
-                test_features_df=new_action_copy.to_frame().T, model_date=model_date
-            )
-            if (
-                model is not None
-                and test_features is not None
-                and test_features.shape[0] > 0
-            ):
-                try:
-                    single_pred = float(model.predict(test_features)[0])
-                    logger.info(
-                        "DEBUG: single-action initial pred %s->Liquidated amount=%s (%s in final features): %s",
-                        index_event_title,
-                        new_action["amount"],
-                        test_features["amount"],
-                        single_pred,
-                    )
-                except Exception as e:
-                    logger.exception(
-                        "DEBUG: failed to run single-action predict after increase: %s",
-                        e,
-                    )
-            else:
-                logger.info(
-                    "DEBUG: single-action pred unavailable after increase; model=%s, features=%s",
-                    model is not None,
-                    None if test_features is None else test_features.shape,
-                )
-        except Exception:
-            logger.exception(
-                "DEBUG: error preparing single-action prediction after increase"
-            )
+        # # Debug: recompute single-action prediction after increasing amount
+        # try:
+        #     train_dates, test_dates = get_date_ranges()
+        #     dates = train_dates.union(test_dates)
+        #     model_date = dates[
+        #         dates <= pd.to_datetime(new_action["timestamp"], unit="s")
+        #     ].max()
+        #     index_event_title = str(new_action["Index Event"]).title()
+        #     model = get_model_for_pair_and_date(
+        #         index_event_title, "Liquidated", model_date=model_date, verbose=True
+        #     )
+        #     new_action_copy = new_action.copy()
+        #     new_action_copy["Outcome Event"] = "liquidated"
+        #     _, _, test_features = preprocess(
+        #         test_features_df=new_action_copy.to_frame().T, model_date=model_date
+        #     )
+        #     if (
+        #         model is not None
+        #         and test_features is not None
+        #         and test_features.shape[0] > 0
+        #     ):
+        #         try:
+        #             single_pred = float(model.predict(test_features)[0])
+        #             logger.info(
+        #                 "DEBUG: single-action initial pred %s->Liquidated amount=%s (%s in final features): %s",
+        #                 index_event_title,
+        #                 new_action["amount"],
+        #                 test_features["amount"],
+        #                 single_pred,
+        #             )
+        #         except Exception as e:
+        #             logger.exception(
+        #                 "DEBUG: failed to run single-action predict after increase: %s",
+        #                 e,
+        #             )
+        #         else:
+        #             try:
+        #                 ver = verify_amount_feature_effect(
+        #                     model,
+        #                     test_features,
+        #                     index_event=index_event_title,
+        #                     outcome_event="Liquidated",
+        #                     model_date=model_date,
+        #                     substrings=["marketwithdrawcount"],
+        #                 )
+        #                 logger.info(
+        #                     "DEBUG: amount-influence check after increase: %s", ver
+        #                 )
+        #             except Exception:
+        #                 logger.exception(
+        #                     "DEBUG: amount-influence verification failed after increase"
+        #                 )
+        #     else:
+        #         logger.info(
+        #             "DEBUG: single-action pred unavailable after increase; model=%s, features=%s",
+        #             model is not None,
+        #             None if test_features is None else test_features.shape,
+        #         )
+        # except Exception:
+        #     logger.exception(
+        #         "DEBUG: error preparing single-action prediction after increase"
+        #     )
     return new_action
 
 
@@ -973,16 +1024,190 @@ def recommend_action(row: pd.Series):
     with keys: liquidation_risk, is_at_risk, risk_trend,
     recommended_action, reason, details."""
 
-    is_at_risk, most_recent_predictions, _ = determine_liquidation_risk(row)
+    is_at_risk, trend_slopes = determine_liquidation_risk(row)
 
     recommended_action = (
         "Repay"
-        if most_recent_predictions["Repay"] >= most_recent_predictions["Deposit"]
+        if trend_slopes["Repay"] >= trend_slopes["Deposit"]
         and is_at_risk
         else "Deposit"
     )
 
     return optimize_recommendation(row, recommended_action)
+
+
+# def verify_amount_feature_effect(
+#     model,
+#     test_features,
+#     substrings=None,
+#     index_event=None,
+#     outcome_event=None,
+#     model_date=None,
+# ):
+#     """Check whether features containing substrings (default 'amount')
+#     appear in the model and whether ablating them changes predictions.
+
+#     Returns a small dict with columns considered, their importances, and
+#     baseline vs ablated prediction difference.
+#     """
+#     # if substrings is None:
+#     #     substrings = ["amount"]
+#     res = {
+#         "found_features": [],
+#         "importances": {},
+#         "baseline_pred": None,
+#         "ablated_pred": None,
+#         "diff": None,
+#     }
+#     if test_features is None or test_features.shape[0] == 0:
+#         return {**res, "error": "no test features"}
+
+#     # locate candidate columns in test_features
+#     if substrings is None:
+#         cols = test_features.columns
+#     else:
+#         cols = [
+#             c for c in test_features.columns if any(s in c.lower() for s in substrings)
+#         ]
+#     res["found_features"] = cols
+
+#     # capture baseline prediction and feature values
+#     try:
+#         baseline = float(model.predict(test_features)[0])
+#         res["baseline_pred"] = baseline
+#         # record the original numeric values for the candidate cols
+#         res["original_values"] = {
+#             c: float(test_features.iloc[0][c])
+#             for c in cols
+#             if c in test_features.columns
+#         }
+#     except Exception as e:
+#         res["error"] = f"baseline prediction failed: {e}"
+#         return res
+
+#     # gather booster info (feature names and raw importances)
+#     try:
+#         booster = model.get_booster()
+#         booster_feat_names = getattr(booster, "feature_names", None)
+#         gains = booster.get_score(importance_type="gain")
+#         res["booster_feature_names"] = booster_feat_names
+#         res["raw_importances_keys"] = list(gains.keys())
+#         # map candidate cols to any matching gain key, fall back to 0
+#         for c in cols:
+#             res["importances"][c] = gains.get(
+#                 c,
+#                 gains.get(
+#                     c.replace(".", "_"),
+#                     gains.get(f"f{list(test_features.columns).index(c)}", 0),
+#                 ),
+#             )
+#         res["importances"] = sorted(
+#             res["importances"].items(), key=lambda x: x[1], reverse=True
+#         )
+#     except Exception:
+#         res["importances"] = {c: None for c in cols}
+
+#     # If we can, load scaler and train_cols for the model's preprocessing
+#     try:
+#         if index_event is not None and outcome_event is not None:
+#             unique_prefix = (
+#                 str(index_event)
+#                 + "_"
+#                 + str(outcome_event)
+#                 + (f"_{model_date}_" if model_date is not None else "_")
+#             )
+#             scaler_path = os.path.join(DATA_CACHE_DIR, unique_prefix + "scaler.pkl")
+#             train_cols_path = os.path.join(
+#                 DATA_CACHE_DIR, unique_prefix + "train_cols.pkl"
+#             )
+#             if os.path.exists(scaler_path):
+#                 with open(scaler_path, "rb") as f:
+#                     scaler_obj = pkl.load(f)
+#                 # scaler may be StandardScaler; try to get mean_ and scale_
+#                 means = getattr(scaler_obj, "mean_", None)
+#                 scales = getattr(scaler_obj, "scale_", None)
+#                 # map scaler stats to train_cols if available
+#                 if os.path.exists(train_cols_path):
+#                     with open(train_cols_path, "rb") as f:
+#                         train_cols_list = list(pkl.load(f))
+#                     if (
+#                         means is not None
+#                         and scales is not None
+#                         and len(means) == len(train_cols_list)
+#                     ):
+#                         scaler_info = {
+#                             col: {"mean": float(means[i]), "scale": float(scales[i])}
+#                             for i, col in enumerate(train_cols_list)
+#                         }
+#                         res["scaler_info_sample"] = {
+#                             c: scaler_info.get(c) for c in cols
+#                         }
+#             # feature name mapping check
+#             try:
+#                 booster = model.get_booster()
+#                 bnames = getattr(booster, "feature_names", None)
+#                 if bnames is not None:
+#                     # map bnames to test_features.columns by equality and by index
+#                     mapping = {}
+#                     for i, bn in enumerate(bnames):
+#                         mapping[bn] = (
+#                             test_features.columns[i]
+#                             if i < len(test_features.columns)
+#                             else None
+#                         )
+#                     res["booster_to_df_col_mapping_sample"] = {
+#                         k: mapping.get(k)
+#                         for k in mapping
+#                         if any(s in k.lower() for s in (substrings or ["amount"]))
+#                     }
+#             except Exception:
+#                 pass
+#     except Exception:
+#         # non-fatal; continue
+#         pass
+
+#     # Ablation test: set candidate cols to 0 (scaled mean), and to large offset and small perturbation
+#     tests = {}
+#     try:
+#         # zeroed (mean)
+#         ablated = test_features.copy()
+#         for c in cols:
+#             if c in ablated.columns:
+#                 ablated[c] = 0.0
+#         tests["zeroed"] = float(model.predict(ablated)[0])
+
+#         # large offset: set to a large positive value (3x std of column if available)
+#         large = test_features.copy()
+#         for c in cols:
+#             if c in large.columns:
+#                 col_std = (
+#                     float(test_features[c].std(ddof=0))
+#                     if test_features[c].std(ddof=0) != 0
+#                     else 1.0
+#                 )
+#                 large[c] = float(test_features.iloc[0][c]) + 3.0 * col_std
+#         tests["large_offset"] = float(model.predict(large)[0])
+
+#         # small epsilon perturbation
+#         small = test_features.copy()
+#         for c in cols:
+#             if c in small.columns:
+#                 col_std = (
+#                     float(test_features[c].std(ddof=0))
+#                     if test_features[c].std(ddof=0) != 0
+#                     else 1.0
+#                 )
+#                 small[c] = float(test_features.iloc[0][c]) + 1e-3 * col_std
+#         tests["small_perturb"] = float(model.predict(small)[0])
+
+#         res["test_preds"] = tests
+#         res["diff_zeroed"] = tests["zeroed"] - res["baseline_pred"]
+#         res["diff_large_offset"] = tests["large_offset"] - res["baseline_pred"]
+#         res["diff_small_perturb"] = tests["small_perturb"] - res["baseline_pred"]
+#     except Exception as e:
+#         res["error"] = f"sensitivity tests failed: {e}"
+
+#     return res
 
 
 # %%
