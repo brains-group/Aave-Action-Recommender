@@ -270,6 +270,97 @@ def preprocess(
     return train_features_final, train_targets, test_processed_features
 
 
+def compute_baseline_hazard(model, X_train, y_train):
+    """
+    Computes the Breslow estimator and the final hazard rate for extrapolation.
+    """
+    log_partial_hazard = model.predict(X_train, output_margin=True)
+
+    # STABILITY TRICK: Center the log-hazards around 0.
+    # The Cox model is invariant to shifts in the log-hazard (it just shifts the baseline).
+    max_log = np.max(log_partial_hazard)
+    log_partial_hazard_centered = log_partial_hazard - max_log
+
+    # Clip to prevent extreme values (e.g., -50 to 50 is plenty of range)
+    log_partial_hazard_centered = np.clip(log_partial_hazard_centered, -50, 50)
+    partial_hazard = np.exp(log_partial_hazard_centered)
+
+    durations = y_train["timeDiff"].values
+    events = y_train["status"].values
+
+    idx = np.argsort(durations)
+    durations = durations[idx]
+    events = events[idx]
+    partial_hazard = partial_hazard[idx]
+
+    unique_durations = np.unique(durations)
+    baseline_cum_hazard = np.zeros_like(unique_durations, dtype=float)
+
+    current_risk_sum = np.sum(partial_hazard)
+    for i, t in enumerate(unique_durations):
+        indices_at_t = durations == t
+        events_at_t = np.sum(events[indices_at_t])
+        baseline_cum_hazard[i] = events_at_t / (current_risk_sum + 1e-9)
+        current_risk_sum -= np.sum(partial_hazard[indices_at_t])
+        # Ensure it doesn't dip below zero due to precision errors
+        current_risk_sum = max(current_risk_sum, 1e-9)
+
+    cum_baseline_hazard = np.cumsum(baseline_cum_hazard)
+
+    # --- NEW: Extrapolation Logic ---
+    # Calculate the average hazard rate over the last 20% of the timeline
+    # to avoid being overly sensitive to a single late-term event.
+    if len(unique_durations) > 5:
+        tail_idx = int(len(unique_durations) * 0.8)
+        time_delta = unique_durations[-1] - unique_durations[tail_idx]
+        hazard_delta = cum_baseline_hazard[-1] - cum_baseline_hazard[tail_idx]
+        final_rate = hazard_delta / (time_delta + 1e-9)
+    else:
+        final_rate = 0.0
+
+    return {
+        "times": unique_durations,
+        "cum_hazards": cum_baseline_hazard,
+        "final_rate": final_rate,
+        "max_time": unique_durations[-1],
+        "log_shift": max_log # IMPORTANT
+    }
+
+
+def get_survival_probability(model, X_test, baseline_meta, time_target):
+    """
+    Predicts survival probability with linear extrapolation for future times.
+    """
+    times = baseline_meta["times"]
+    cum_hazards = baseline_meta["cum_hazards"]
+    max_t = baseline_meta["max_time"]
+    final_rate = baseline_meta["final_rate"]
+
+    # Get the baseline cumulative hazard for time_target
+    if time_target <= max_t:
+        idx = np.searchsorted(times, time_target) - 1
+        h0_t = cum_hazards[max(0, idx)]
+    else:
+        # EXTRAPOLATION: Last known hazard + (excess time * rate)
+        excess_time = time_target - max_t
+        h0_t = cum_hazards[-1] + (excess_time * final_rate)
+
+    log_margin = model.predict(X_test, output_margin=True)
+
+    # Apply the same shift and clipping
+    log_margin_centered = log_margin - baseline_meta["log_shift"]
+    log_margin_centered = np.clip(log_margin_centered, -50, 50)
+
+    relative_risk = np.exp(log_margin_centered)
+
+    # Survival Probability: S(t) = exp(-H_0(t) * exp(shifted_log_margin))
+    # We clip the exponent here too to prevent S(t) from becoming exactly 0 or 1 too fast
+    exponent = -h0_t * relative_risk
+    exponent = np.clip(exponent, -50, 0) # cannot have positive survival exponent
+
+    return np.exp(exponent)
+
+
 # %%
 def get_model_for_pair_and_date(
     index_event: str,
@@ -285,6 +376,7 @@ def get_model_for_pair_and_date(
     model_date_str = str(model_date) if model_date is not None else "latest"
     model_filename = f"xgboost_cox_{index_event}_{outcome_event}_{model_date_str}.ubj"
     model_path = os.path.join(MODEL_CACHE_DIR, model_filename)
+    baseline_path = model_path.replace(".ubj", "_baseline.pkl")
 
     # Create model with Cox objective
     model = XGBRegressor(
@@ -296,9 +388,9 @@ def get_model_for_pair_and_date(
         seed=42,
         verbosity=0,
         max_bin=64,
-        learning_rate=0.04,
-        max_depth=5,
-        subsample=0.85,
+        learning_rate=0.05,
+        max_depth=6,
+        subsample=0.8,
         colsample_bytree=0.8,
         min_child_weight=5,
         reg_lambda=1.0,
@@ -306,6 +398,7 @@ def get_model_for_pair_and_date(
     )
 
     # If model file exists, try to load into the estimator and return the estimator
+    needToTrainAndSaveModel = True
     if os.path.exists(model_path):
         if verbose:
             logger.info(f"Loading existing model from {model_path}")
@@ -313,12 +406,18 @@ def get_model_for_pair_and_date(
             model.load_model(model_path)
             if verbose:
                 logger.info(f"model loaded from {model_path}")
-            MODELS_CACHE[model_key] = model
-            return model
         except Exception as e:
             logger.warning(
                 f"Warning: failed to load model from {model_path}: {e}. Will retrain."
             )
+        else:
+            if os.path.exists(baseline_path):
+                with open(baseline_path, "rb") as f:
+                    baseline_data = pkl.load(f)
+                MODELS_CACHE[model_key] = (model, baseline_data)
+                return model, baseline_data
+            else:
+                needToTrainAndSaveModel = False
 
     dataset_path = os.path.join(index_event, outcome_event)
 
@@ -340,34 +439,39 @@ def get_model_for_pair_and_date(
     y_train_duration = y_train["timeDiff"].values
     y_train_event = y_train["status"].values
 
-    # Fit model: XGBoost Cox expects labels to be the event indicators
-    # and the sample_weight to be the durations
-    if verbose:
-        logger.info("Training model...")
-    try:
-        model.fit(X_train, y_train_event, sample_weight=y_train_duration)
-    except Exception as e:
-        logger.error(f"ERROR: Model training failed for {dataset_path}: {e}")
-        raise
-
-    # Save model: try estimator's save_model, fall back to Booster.save_model
-    try:
-        # XGBRegressor implements save_model; call it and confirm file created
-        model.save_model(model_path)
+    if needToTrainAndSaveModel:
+        # Fit model: XGBoost Cox expects labels to be the event indicators
+        # and the sample_weight to be the durations
         if verbose:
-            logger.info(f"Model saved to {model_path}")
-    except Exception:
+            logger.info("Training model...")
         try:
-            booster = model.get_booster()
-            booster.save_model(model_path)
-            if verbose:
-                logger.info(f"Model booster saved to {model_path}")
+            model.fit(X_train, y_train_event, sample_weight=y_train_duration)
         except Exception as e:
-            logger.warning(f"Warning: Failed to save model to {model_path}: {e}")
+            logger.error(f"ERROR: Model training failed for {dataset_path}: {e}")
+            raise
+
+        # Save model: try estimator's save_model, fall back to Booster.save_model
+        try:
+            # XGBRegressor implements save_model; call it and confirm file created
+            model.save_model(model_path)
+            if verbose:
+                logger.info(f"Model saved to {model_path}")
+        except Exception:
+            try:
+                booster = model.get_booster()
+                booster.save_model(model_path)
+                if verbose:
+                    logger.info(f"Model booster saved to {model_path}")
+            except Exception as e:
+                logger.warning(f"Warning: Failed to save model to {model_path}: {e}")
+
+    baseline_data = compute_baseline_hazard(model, X_train, y_train)
+    with open(baseline_path, "wb") as f:
+        pkl.dump(baseline_data, f)
 
     # cache model (even if training produced a fitted estimator)
-    MODELS_CACHE[model_key] = model
-    return model
+    MODELS_CACHE[model_key] = (model, baseline_data)
+    return model, baseline_data
 
 
 # %%
@@ -469,9 +573,12 @@ def get_user_history(user_id: str, up_to_timestamp: int) -> pd.DataFrame:
     return user_history_df
 
 
-def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
+def get_transaction_history_predictions(
+    row: pd.Series, horizon_seconds=7 * 24 * 60 * 60
+) -> pd.DataFrame:
     results_cache_file = os.path.join(
-        RESULTS_CACHE_DIR, f"{row['user']}_{row['timestamp']}_{row['amount']}.pkl"
+        RESULTS_CACHE_DIR,
+        f"{row['user']}_{row['timestamp']}_{row['amount']}_{horizon_seconds}.pkl",
     )
     # If exact cache exists for this amount, return it immediately
     if os.path.exists(results_cache_file):
@@ -553,16 +660,17 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
                     results[int(ts)][outcome_event] = None
                 continue
 
-            model = get_model_for_pair_and_date(
+            model_pack = get_model_for_pair_and_date(
                 index_event_title,
                 outcome_event,
                 model_date=model_date,
                 verbose=True,
             )
-            if model is None:
+            if model_pack is None:
                 for ts in group["timestamp"]:
                     results[int(ts)][outcome_event] = None
                 continue
+            model, baseline_meta = model_pack
 
             # Prepare a copy of the group's rows with the requested Outcome Event
             test_df = group.copy()
@@ -580,7 +688,11 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
 
             # Predict in batch and map predictions back to timestamps
             try:
-                preds = model.predict(test_features)
+                # preds = model.predict(test_features)
+                surv_probs = get_survival_probability(
+                    model, test_features, baseline_meta, time_target=horizon_seconds
+                )
+                event_probabilities = 1.0 - surv_probs
             except Exception:
                 # If prediction fails for any reason, mark as None
                 for ts in group["timestamp"]:
@@ -588,9 +700,9 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
                 continue
 
             # Align by index: test_features.index corresponds to rows in user_history
-            for idx_i, pred in zip(test_features.index, preds):
+            for idx_i, prob in zip(test_features.index, event_probabilities):
                 ts = int(user_history.loc[idx_i, "timestamp"])
-                results[ts][outcome_event] = float(pred)
+                results[ts][outcome_event] = float(prob)
 
     with open(
         results_cache_file,
@@ -719,46 +831,46 @@ def determine_liquidation_risk(row: pd.Series):
 
     is_at_risk = False
 
-    # most_recent_predictions = predict_transaction_history[
-    #     max(predict_transaction_history.keys())
-    # ]
-    # if most_recent_predictions["Liquidated"] >= max(most_recent_predictions.values()):
-    #     is_at_risk = True
-    #     trend_slopes = None
-    #     logger.info(
-    #         "Liquidation Risk Immediate: "
-    #         + str(most_recent_predictions["Liquidated"])
-    #         + " >= "
-    #         + str(list(most_recent_predictions.values()))
-    #     )
-    # else:
-    trend_slopes = {
-        outcome_event: calculate_trend_slope(
-            {
-                timestamp: preds[outcome_event]
-                for timestamp, preds in predict_transaction_history.items()
-                if preds and outcome_event in preds
-            }
-        )
-        for outcome_event in predict_transaction_history[
-            sorted(predict_transaction_history.keys(), reverse=True)[0]
-        ].keys()
-    }
-    if trend_slopes["Liquidated"] > 0 and trend_slopes["Liquidated"] >= max(
-        trend_slopes.values()
-    ):
+    most_recent_predictions = predict_transaction_history[
+        max(predict_transaction_history.keys())
+    ]
+    if most_recent_predictions["Liquidated"] >= max(most_recent_predictions.values()):
         is_at_risk = True
+        trend_slopes = None
         logger.info(
-            "Liquidation Risk Gradual: "
-            + str(trend_slopes["Liquidated"])
+            "Liquidation Risk Immediate: "
+            + str(most_recent_predictions["Liquidated"])
             + " >= "
-            + str(list(trend_slopes.values()))
+            + str(list(most_recent_predictions.values()))
         )
+    else:
+        trend_slopes = {
+            outcome_event: calculate_trend_slope(
+                {
+                    timestamp: preds[outcome_event]
+                    for timestamp, preds in predict_transaction_history.items()
+                    if preds and outcome_event in preds
+                }
+            )
+            for outcome_event in predict_transaction_history[
+                sorted(predict_transaction_history.keys(), reverse=True)[0]
+            ].keys()
+        }
+        if trend_slopes["Liquidated"] > 0 and trend_slopes["Liquidated"] >= max(
+            trend_slopes.values()
+        ):
+            is_at_risk = True
+            logger.info(
+                "Liquidation Risk Gradual: "
+                + str(trend_slopes["Liquidated"])
+                + " >= "
+                + str(list(trend_slopes.values()))
+            )
 
     if not is_at_risk:
         logger.info("No Liquidation Risk.")
-    # return is_at_risk, most_recent_predictions, trend_slopes
-    return is_at_risk, trend_slopes
+    return is_at_risk, most_recent_predictions, trend_slopes
+    # return is_at_risk, trend_slopes
 
 
 def generate_next_transaction(
@@ -1024,16 +1136,16 @@ def recommend_action(row: pd.Series):
     with keys: liquidation_risk, is_at_risk, risk_trend,
     recommended_action, reason, details."""
 
-    is_at_risk, trend_slopes = determine_liquidation_risk(row)
+    is_at_risk, most_recent_predictions, _ = determine_liquidation_risk(row)
 
     recommended_action = (
         "Repay"
-        if trend_slopes["Repay"] >= trend_slopes["Deposit"]
+        if most_recent_predictions["Repay"] >= most_recent_predictions["Deposit"]
         and is_at_risk
         else "Deposit"
     )
 
-    return optimize_recommendation(row, recommended_action)
+    return optimize_recommendation(row, recommended_action), is_at_risk
 
 
 # def verify_amount_feature_effect(
