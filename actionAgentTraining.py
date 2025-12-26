@@ -360,6 +360,47 @@ def get_survival_probability(model, X_test, baseline_meta, time_target):
 
     return np.exp(exponent)
 
+def get_expected_time_to_event(model, X_test, baseline_meta, max_prediction_days=365):
+    """
+    Calculates the expected time (in seconds) until the event occurs.
+    """
+    times = baseline_meta["times"]
+    cum_hazards = baseline_meta["cum_hazards"]
+    max_t = baseline_meta["max_time"]
+    final_rate = baseline_meta["final_rate"]
+    log_shift = baseline_meta["log_shift"]
+    
+    # Get relative risk (exp(log_margin - shift))
+    log_margin = model.predict(X_test, output_margin=True)
+    relative_risk = np.exp(np.clip(log_margin - log_shift, -50, 50))
+    
+    # We will integrate S(t) using the trapezoidal rule or a step-sum
+    # 1. Calculate survival at every 'jump' point in the training data
+    # S(t) = exp(-H0(t) * RR)
+    # Use clip to prevent overflow in the exponent
+    exponents = -cum_hazards[:, np.newaxis] * relative_risk
+    surv_at_jumps = np.exp(np.clip(exponents, -50, 0)) # Shape: (len_times, len_samples)
+    
+    # 2. Area under the curve for the 'known' training range
+    # Widths of time intervals
+    time_deltas = np.diff(times, prepend=0)
+    expected_time = np.sum(surv_at_jumps * time_deltas[:, np.newaxis], axis=0)
+    
+    # 3. Handle the tail (Extrapolation)
+    # If the hazard rate > 0, the remaining area is the integral of exp(-rate * t)
+    # Integral from max_t to infinity of [S(max_t) * exp(-final_rate * RR * (t - max_t))]
+    # This equals: S(max_t) / (final_rate * RR)
+    s_max = surv_at_jumps[-1, :]
+    effective_rate = (final_rate * relative_risk) + 1e-9
+    tail_area = s_max / effective_rate
+    
+    # Cap the tail area to a reasonable horizon (e.g., 1 year) to prevent 
+    # infinite expectations if the final_rate is near zero.
+    max_seconds = max_prediction_days * 24 * 3600
+    expected_time = np.clip(expected_time + tail_area, 0, max_seconds)
+    
+    return expected_time
+
 
 # %%
 def get_model_for_pair_and_date(
@@ -689,10 +730,13 @@ def get_transaction_history_predictions(
             # Predict in batch and map predictions back to timestamps
             try:
                 # preds = model.predict(test_features)
-                surv_probs = get_survival_probability(
+                # surv_probs = get_survival_probability(
+                #     model, test_features, baseline_meta, time_target=horizon_seconds
+                # )
+                # event_probabilities = 1.0 - surv_probs
+                time_preds = get_expected_time_to_event(
                     model, test_features, baseline_meta, time_target=horizon_seconds
                 )
-                event_probabilities = 1.0 - surv_probs
             except Exception:
                 # If prediction fails for any reason, mark as None
                 for ts in group["timestamp"]:
@@ -700,9 +744,9 @@ def get_transaction_history_predictions(
                 continue
 
             # Align by index: test_features.index corresponds to rows in user_history
-            for idx_i, prob in zip(test_features.index, event_probabilities):
+            for idx_i, time_pred in zip(test_features.index, time_preds):
                 ts = int(user_history.loc[idx_i, "timestamp"])
-                results[ts][outcome_event] = float(prob)
+                results[ts][outcome_event] = float(time_pred)
 
     with open(
         results_cache_file,
@@ -834,7 +878,7 @@ def determine_liquidation_risk(row: pd.Series):
     most_recent_predictions = predict_transaction_history[
         max(predict_transaction_history.keys())
     ]
-    if most_recent_predictions["Liquidated"] >= max(most_recent_predictions.values()):
+    if most_recent_predictions["Liquidated"] <= max(most_recent_predictions.values()):
         is_at_risk = True
         trend_slopes = None
         logger.info(
@@ -856,7 +900,7 @@ def determine_liquidation_risk(row: pd.Series):
                 sorted(predict_transaction_history.keys(), reverse=True)[0]
             ].keys()
         }
-        if trend_slopes["Liquidated"] > 0 and trend_slopes["Liquidated"] >= max(
+        if trend_slopes["Liquidated"] < 0 and trend_slopes["Liquidated"] <= max(
             trend_slopes.values()
         ):
             is_at_risk = True
