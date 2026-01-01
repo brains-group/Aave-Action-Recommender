@@ -15,7 +15,8 @@ EVENTS = ["Deposit", "Withdraw", "Repay", "Borrow", "Liquidated"]
 
 RECOMMENDATIONS_FILE = os.path.join(CACHE_DIR, "recommendations.pkl")
 
-with open("./Aave-Simulator/config.json", 'r') as f:
-    PROFILES_DIR = json.load(f)["sample_user_profile_path"]
+if os.path.exists("./Aave-Simulator/config.json"):
+    with open("./Aave-Simulator/config.json", 'r') as f:
+        PROFILES_DIR = json.load(f)["sample_user_profile_path"]
 PROFILE_CACHE_DIR = os.path.join(CACHE_DIR, "profile_backups")
 os.makedirs(PROFILE_CACHE_DIR, exist_ok=True)

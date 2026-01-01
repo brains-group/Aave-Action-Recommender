@@ -5,3 +5,4 @@ pyEnv.sh
 __pycache__/
 *.out
 *.log
+profiles/
