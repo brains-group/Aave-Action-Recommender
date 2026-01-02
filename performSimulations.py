@@ -7,6 +7,8 @@ import os
 import sys
 import importlib
 
+# TODO: Check how many of the recommendations/liquidation risks line up with what the data had
+
 # Make the bundled Aave-Simulator directory importable (it's next to this file)
 this_dir = os.path.dirname(os.path.realpath(__file__))
 aave_sim_path = os.path.join(this_dir, "Aave-Simulator")
