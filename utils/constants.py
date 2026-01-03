@@ -13,6 +13,8 @@ os.makedirs(RESULTS_CACHE_DIR, exist_ok=True)
 
 EVENTS = ["Deposit", "Withdraw", "Repay", "Borrow", "Liquidated"]
 
+DEFAULT_TIME_DELTA_SECONDS = 600
+
 RECOMMENDATIONS_FILE = os.path.join(CACHE_DIR, "recommendations.pkl")
 
 if os.path.exists("./Aave-Simulator/config.json"):

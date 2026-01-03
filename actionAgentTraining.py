@@ -1150,7 +1150,7 @@ def determine_liquidation_risk(row: pd.Series):
 
 
 def generate_next_transaction(
-    prev_row: pd.Series, action_type: str, amount=10.0, time_delta_seconds=600
+    prev_row: pd.Series, action_type: str, amount=10.0, time_delta_seconds=DEFAULT_TIME_DELTA_SECONDS
 ):
     """
     Generates a new transaction row 'soon after' the previous row.
