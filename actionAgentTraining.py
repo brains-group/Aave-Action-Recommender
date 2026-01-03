@@ -22,7 +22,7 @@ import logging
 # Module logger
 logger = logging.getLogger(__name__)
 # File handler: capture all log levels to file
-_file_handler = logging.FileHandler("output16.log")
+_file_handler = logging.FileHandler("output17.log")
 _file_handler.setLevel(logging.DEBUG)
 _file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
 logger.addHandler(_file_handler)
@@ -334,6 +334,7 @@ def preprocess(
 #         "log_shift": log_shift,  # IMPORTANT
 #     }
 
+
 def compute_baseline_hazard(model, X_train, y_train):
     """
     Computes the Breslow estimator using Vectorized operations.
@@ -342,7 +343,7 @@ def compute_baseline_hazard(model, X_train, y_train):
     # 1. Get Log-Hazards and Shift
     log_partial_hazard = model.predict(X_train, output_margin=True)
     log_shift = np.median(log_partial_hazard)
-    
+
     # Center and Clip
     log_partial_hazard_centered = np.clip(log_partial_hazard - log_shift, -10, 10)
     partial_hazard = np.exp(log_partial_hazard_centered)
@@ -350,29 +351,31 @@ def compute_baseline_hazard(model, X_train, y_train):
     # 2. VECTORIZED BRESLOW ESTIMATOR
     # Instead of iterating, we group by time.
     # This collapses 500k rows into unique time buckets instantly.
-    df_temp = pd.DataFrame({
-        "time": y_train["timeDiff"].values,
-        "event": y_train["status"].values,
-        "risk": partial_hazard
-    })
-    
+    df_temp = pd.DataFrame(
+        {
+            "time": y_train["timeDiff"].values,
+            "event": y_train["status"].values,
+            "risk": partial_hazard,
+        }
+    )
+
     # Group by unique durations
     # sum('risk') = hazard of all people leaving at this time t
     # sum('event') = actual deaths at this time t
     grouped = df_temp.groupby("time").agg({"event": "sum", "risk": "sum"}).sort_index()
-    
+
     unique_durations = grouped.index.values
     events_at_t = grouped["event"].values
     risk_leaving_at_t = grouped["risk"].values
-    
+
     # STABILITY FIX: Use Reverse Cumulative Sum for Risk Set
     # risk_at_t[i] = Sum of all risk leaving from time i to end
     # This avoids "Total - Cumulative" subtraction errors.
     risk_at_t = np.cumsum(risk_leaving_at_t[::-1])[::-1]
-    
+
     # Handle near-zero risk to avoid division errors
     risk_at_t = np.maximum(risk_at_t, 1e-9)
-    
+
     # Calculate Baseline Increment (d_i / Sum_Risk_i)
     hazard_increments = events_at_t / risk_at_t
     cum_baseline_hazard = np.cumsum(hazard_increments)
@@ -491,32 +494,32 @@ def get_survival_probability(model, X_test, baseline_meta, time_target):
 #     max_t = baseline_meta["max_time"]
 #     final_rate = baseline_meta["final_rate"]
 #     log_shift = baseline_meta["log_shift"]
-    
+
 #     log_margin = model.predict(X_test, output_margin=True)
 #     relative_risk = np.exp(np.clip(log_margin - log_shift, -50, 50))
-    
+
 #     n_samples = len(relative_risk)
 #     expected_times = np.zeros(n_samples)
 #     time_deltas = np.diff(times, prepend=0)
-    
+
 #     # Process transactions in small batches to keep RAM usage low
 #     for start in range(0, n_samples, batch_size):
 #         end = min(start + batch_size, n_samples)
 #         rr_batch = relative_risk[start:end]
-        
+
 #         # Calculate survival probabilities for this batch
 #         # This now creates a (2000, 2000) matrix instead of (546k, 277k)
 #         # 4 million elements (32MB) vs 151 billion elements (1.1TB)
 #         exponents = -cum_hazards[:, np.newaxis] * rr_batch
 #         surv_at_jumps = np.exp(np.clip(exponents, -50, 0))
-        
+
 #         # Area under curve
 #         batch_sum = np.sum(surv_at_jumps * time_deltas[:, np.newaxis], axis=0)
-        
+
 #         # Tail Area
 #         s_max = surv_at_jumps[-1, :]
 #         tail_area = s_max / ((final_rate * rr_batch) + 1e-9)
-        
+
 #         expected_times[start:end] = batch_sum + tail_area
 
 #     logger.debug(f"Log Margin stats: min={log_margin.min()}, max={log_margin.max()}, mean={log_margin.mean()}")
@@ -534,29 +537,29 @@ def get_survival_probability(model, X_test, baseline_meta, time_target):
 #     max_t = baseline_meta["max_time"]
 #     final_rate = baseline_meta["final_rate"]
 #     log_shift = baseline_meta["log_shift"]
-    
+
 #     # Target Hazard H = -ln(1 - 0.05) ≈ 0.051
 #     # We want to know WHEN the user crosses this hazard line.
 #     target_hazard = -np.log(1.0 - 0.05)
-    
+
 #     log_margin = model.predict(X_test, output_margin=True)
 #     relative_risk = np.exp(np.clip(log_margin - log_shift, -20, 20))
-    
+
 #     # The baseline hazard required to hit the target, given this user's risk multiplier
 #     # H(t) * RR = target  ->  H(t) = target / RR
 #     required_baseline = target_hazard / (relative_risk + 1e-12)
-    
+
 #     n_samples = len(required_baseline)
 #     predicted_times = np.zeros(n_samples)
-    
+
 #     # Find the time t where baseline hazard >= required_baseline
 #     idx = np.searchsorted(cum_hazards, required_baseline)
-    
+
 #     # 1. Threshold met within training data
 #     mask_within = idx < len(cum_hazards)
 #     if np.any(mask_within):
 #         predicted_times[mask_within] = times[idx[mask_within]]
-        
+
 #     # 2. Threshold NOT met (Extrapolation)
 #     # H(t) = H_last + rate * (t - t_last)
 #     mask_outside = ~mask_within
@@ -564,13 +567,14 @@ def get_survival_probability(model, X_test, baseline_meta, time_target):
 #         req_h = required_baseline[mask_outside]
 #         last_h = cum_hazards[-1]
 #         safe_rate = final_rate if final_rate > 1e-12 else 1e-12
-        
+
 #         extra_time = (req_h - last_h) / safe_rate
 #         predicted_times[mask_outside] = max_t + extra_time
 
 #     # Cap at 5 years to keep numbers sane (but allows differentiation well past 1 year)
 #     MAX_SECONDS = 5 * 365 * 24 * 3600
 #     return np.clip(predicted_times, 0, MAX_SECONDS)
+
 
 def get_expected_time_to_event(model, X_test, baseline_meta, max_prediction_days=365):
     """
@@ -583,11 +587,11 @@ def get_expected_time_to_event(model, X_test, baseline_meta, max_prediction_days
     max_t = baseline_meta["max_time"]
     final_rate = baseline_meta["final_rate"]
     log_shift = baseline_meta["log_shift"]
-    
+
     # 1. Define a standard window for probability estimation (e.g., 7 days)
     # This acts as our "instantaneous" risk measurement window.
     window_seconds = 7 * 24 * 3600
-    
+
     # 2. Get Baseline Hazard for this window
     if window_seconds <= max_t:
         idx = np.searchsorted(times, window_seconds) - 1
@@ -596,24 +600,25 @@ def get_expected_time_to_event(model, X_test, baseline_meta, max_prediction_days
     else:
         excess = window_seconds - max_t
         h0 = cum_hazards[-1] + (excess * final_rate)
-        
+
     # 3. Calculate Risk Probability for each user
     log_margin = model.predict(X_test, output_margin=True)
     relative_risk = np.exp(np.clip(log_margin - log_shift, -20, 20))
-    
+
     # Prob = 1 - exp(-H0 * RR)
     # We clip the exponent to avoid overflow/underflow
     exponent = -h0 * relative_risk
     exponent = np.clip(exponent, -50, 0)
     probability = 1.0 - np.exp(exponent)
-    
+
     # 4. Calculate Return Period: Window / Probability
     # If prob is 1.0, time is Window.
     # If prob is tiny, time is huge.
     # Add epsilon to prob to prevent division by zero.
     probability = np.maximum(probability, 1e-12)
-    
+
     return window_seconds / probability
+
 
 # %%
 def get_model_for_pair_and_date(
@@ -627,7 +632,9 @@ def get_model_for_pair_and_date(
     if model_key in MODELS_CACHE:
         return MODELS_CACHE[model_key]
     # normalize model_date for filename
-    model_date_str = str(model_date).replace(" ", "_") if model_date is not None else "latest"
+    model_date_str = (
+        str(model_date).replace(" ", "_") if model_date is not None else "latest"
+    )
     model_filename = f"xgboost_cox_{index_event}_{outcome_event}_{model_date_str}.ubj"
     model_path = os.path.join(MODEL_CACHE_DIR, model_filename)
     baseline_path = model_path.replace(".ubj", "_baseline.pkl")
@@ -763,11 +770,13 @@ def train_models_for_all_event_pairs(
         logger.info("\n\nAll prediction files have been generated.")
 
 
+# %%
+
 DATE_RANGES_CACHE = None
 
 
-# %%
 def get_date_ranges():
+    global DATE_RANGES_CACHE
     if os.path.exists(os.path.join(CACHE_DIR, "date_ranges.pkl")):
         with open(os.path.join(CACHE_DIR, "date_ranges.pkl"), "rb") as f:
             DATE_RANGES_CACHE = pkl.load(f)
@@ -1093,6 +1102,7 @@ def determine_liquidation_risk(row: pd.Series):
     }
 
     is_at_risk = False
+    is_at_immediate_risk = False
 
     most_recent_predictions = predict_transaction_history[
         max(predict_transaction_history.keys())
@@ -1101,6 +1111,7 @@ def determine_liquidation_risk(row: pd.Series):
         most_recent_predictions["Liquidated"] <= min(most_recent_predictions.values())
     ):
         is_at_risk = True
+        is_at_immediate_risk = True
         trend_slopes = None
         logger.info(
             "Liquidation Risk Immediate: "
@@ -1134,7 +1145,7 @@ def determine_liquidation_risk(row: pd.Series):
 
     if not is_at_risk:
         logger.info("No Liquidation Risk.")
-    return is_at_risk, most_recent_predictions, trend_slopes
+    return is_at_risk, is_at_immediate_risk, most_recent_predictions, trend_slopes
     # return is_at_risk, trend_slopes
 
 
@@ -1401,19 +1412,26 @@ def recommend_action(row: pd.Series):
     with keys: liquidation_risk, is_at_risk, risk_trend,
     recommended_action, reason, details."""
 
-    is_at_risk, most_recent_predictions, _ = determine_liquidation_risk(row)
+    is_at_risk, is_at_immediate_risk, most_recent_predictions, trend_slopes = (
+        determine_liquidation_risk(row)
+    )
 
     recommended_action = (
         "Repay"
         if (
-            most_recent_predictions["Deposit"] is None or
-            most_recent_predictions["Repay"] >= most_recent_predictions["Deposit"]
+            most_recent_predictions["Deposit"] is None
+            or most_recent_predictions["Repay"] >= most_recent_predictions["Deposit"]
         )
         and is_at_risk
         else "Deposit"
     )
 
-    return optimize_recommendation(row, recommended_action), is_at_risk
+    return optimize_recommendation(row, recommended_action), {
+        "is_at_risk": is_at_risk,
+        "is_at_immediate_risk": is_at_immediate_risk,
+        "most_recent_predictions": most_recent_predictions,
+        "trend_slopes": trend_slopes,
+    }
 
 
 # def verify_amount_feature_effect(
@@ -1628,7 +1646,7 @@ def get_train_set():
                     df[
                         (df["timestamp"] >= min_train_date)
                         & (df["timestamp"] < max_train_date)
-                    ].sample(n=100, random_state=seed),
+                    ].sample(n=300, random_state=seed),
                 ],
                 ignore_index=True,
             )
@@ -1658,6 +1676,7 @@ def run_training_pipeline():
         logger.info("Recommended %s\nfor %s", str(recommendations[rowID]), rowID)
     # with open(recommendation_cache_file, "wb") as f:
     #     pkl.dump(recommendations, f)
+
 
 if __name__ == "__main__":
     run_training_pipeline()
