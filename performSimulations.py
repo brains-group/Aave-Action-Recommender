@@ -14,7 +14,7 @@ import threading
 import concurrent.futures
 import threading
 
-outputFile = "simulationOutput3.log"
+outputFile = "simulationOutput7.log"
 # Module logger
 logger = logging.getLogger(__name__)
 # File handler: capture all log levels to file
@@ -29,6 +29,7 @@ logger.addHandler(_file_handler)
 # logger.addHandler(_console_handler)
 # Ensure logger forwards all levels to handlers (file will receive DEBUG+)
 logger.setLevel(logging.DEBUG)
+logger.propagate = False
 
 
 def set_log_file(path: str, file_level: str | int = "DEBUG"):
