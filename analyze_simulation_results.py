@@ -416,8 +416,8 @@ def main():
     parser.add_argument(
         '--output-dir',
         type=str,
-        default='./analysis_output',
-        help='Directory to save visualizations (default: ./analysis_output)'
+        default='./cache/analysis_output',
+        help='Directory to save visualizations (default: ./cache/analysis_output)'
     )
     parser.add_argument(
         '--export-text',

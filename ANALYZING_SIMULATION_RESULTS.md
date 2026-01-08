@@ -48,8 +48,8 @@ python3 analyze_simulation_cache.py
 
 **Outputs:**
 - Console summary statistics
-- `analysis_output/detailed_cases.json`: Case-by-case analysis
-- `analysis_output/simulation_cache_analysis.png`: Visualization charts
+- `cache/analysis_output/detailed_cases.json`: Case-by-case analysis
+- `cache/analysis_output/simulation_cache_analysis.png`: Visualization charts
 
 **Key Insights from Current Analysis:**
 - **7,085 simulation pairs analyzed**
@@ -280,7 +280,7 @@ for case in improved[:10]:
 python3 analyze_simulation_cache.py
 
 # Custom output directory
-python3 analyze_simulation_cache.py --output-dir ./my_analysis
+python3 analyze_simulation_cache.py --output-dir ./cache/my_analysis
 
 # Skip visualizations
 python3 analyze_simulation_cache.py --no-plots

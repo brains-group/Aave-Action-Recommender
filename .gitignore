@@ -6,4 +6,5 @@ __pycache__/
 *.out
 *.log
 profiles/
-profilesanalysis_output/
+profiles
+analysis_output/

@@ -395,8 +395,8 @@ def main():
     parser.add_argument(
         '--output-dir',
         type=str,
-        default='./analysis_output',
-        help='Directory to save output files (default: ./analysis_output)'
+        default='./cache/analysis_output',
+        help='Directory to save output files (default: ./cache/analysis_output)'
     )
     parser.add_argument(
         '--export-json',
