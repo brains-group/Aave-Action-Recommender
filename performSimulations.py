@@ -239,9 +239,23 @@ def convert_to_json_serializable(obj):
     - numpy arrays
     - pandas NA values
     - nested dicts and lists
+    - tuple keys (converts to strings like "action1->action2")
     """
     if isinstance(obj, dict):
-        return {k: convert_to_json_serializable(v) for k, v in obj.items()}
+        # Convert dict, handling tuple keys by converting them to strings
+        result = {}
+        for k, v in obj.items():
+            # Convert tuple keys to strings (e.g., ("Deposit", "Liquidated") -> "Deposit->Liquidated")
+            if isinstance(k, tuple):
+                key_str = "->".join(str(item) for item in k)
+            elif isinstance(k, (np.integer, np.int64, np.int32)):
+                key_str = int(k)
+            elif isinstance(k, (np.floating, np.float64, np.float32)):
+                key_str = float(k)
+            else:
+                key_str = k
+            result[key_str] = convert_to_json_serializable(v)
+        return result
     elif isinstance(obj, (list, tuple)):
         return [convert_to_json_serializable(item) for item in obj]
     elif isinstance(obj, (np.integer, np.int64, np.int32)):
