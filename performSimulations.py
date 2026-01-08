@@ -908,13 +908,37 @@ def process_recommendation(item):
         is_at_immediate_risk = liquidation_info.get("is_at_immediate_risk", False)
         most_recent_predictions = liquidation_info.get("most_recent_predictions")
         trend_slopes = liquidation_info.get("trend_slopes")
-        user_profile_file = Path(PROFILES_DIR).expanduser() / f"user_{user}.json"
+        # Search for profile in both non_liquidated_profiles and liquidated_profiles subdirectories
+        # PROFILES_DIR should point to a directory containing both subdirectories
+        profiles_base = Path(PROFILES_DIR).expanduser()
         
-        if not user_profile_file.exists():
+        # Primary search paths: check the standard structure first
+        # 1. non_liquidated_profiles/profiles/
+        # 2. liquidated_profiles/profiles/
+        search_paths = [
+            profiles_base / "non_liquidated_profiles" / "profiles" / f"user_{user}.json",
+            profiles_base / "liquidated_profiles" / "profiles" / f"user_{user}.json",
+        ]
+        
+        # Fallback: try directly in PROFILES_DIR (backward compatibility)
+        search_paths.append(profiles_base / f"user_{user}.json")
+        
+        user_profile_file = None
+        for search_path in search_paths:
+            if search_path.exists():
+                user_profile_file = search_path
+                logger.debug(f"Found profile for user {user} at: {user_profile_file}")
+                break
+        
+        if user_profile_file is None:
+            # Only show first few paths in warning to avoid cluttering logs
+            paths_displayed = "\n".join([f"  - {p}" for p in search_paths[:3]])
             logger.warning(
-                f"Did not find profile for user {user} at {user_profile_file}. Skipping..."
+                f"Did not find profile for user {user} in any of these locations:\n{paths_displayed}\n"
+                f"  ... (checked {len(search_paths)} total locations)\n"
+                f"Skipping..."
             )
-            return {'success': False, 'error': f'Profile file not found: {user_profile_file}', 'stats_updates': {}}
+            return {'success': False, 'error': f'Profile file not found for user {user}', 'stats_updates': {}}
         
         try:
             with user_profile_file.open("r") as f:
