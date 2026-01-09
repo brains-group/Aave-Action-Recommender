@@ -915,7 +915,7 @@ def updateAmountOrUSD(recommendation, amount = None, amountUSD = None):
     recommendation["logAmount"] = float(log1p_fn(float(recommendation["amount"])))
 
 def update_recommendation_if_necessary(recommendation, results_without_recommendation):
-    if recommendation['action'] != 'Repay':
+    if recommendation['Index Event'] != 'repay':
         return recommendation
     total_debt_usd = results_without_recommendation["final_state"]["total_debt_usd"]
     amount_usd = recommendation["amountUSD"]
