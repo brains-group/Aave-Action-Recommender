@@ -17,6 +17,12 @@ EVENTS = ["Deposit", "Withdraw", "Repay", "Borrow", "Liquidated"]
 
 DEFAULT_TIME_DELTA_SECONDS = 600
 
+# Dust liquidation prevention thresholds
+# Based on analysis: dust liquidations occur when positions are extremely small
+MIN_RECOMMENDATION_DEBT_USD = 1.0  # Minimum debt to avoid dust liquidation
+MIN_RECOMMENDATION_COLLATERAL_USD = 10.0  # Minimum collateral to avoid dust liquidation
+MIN_RECOMMENDATION_AMOUNT = 50.0  # Minimum recommended amount (USD equivalent) to prevent creating tiny positions
+
 RECOMMENDATIONS_FILE = os.path.join(CACHE_DIR, "recommendations.pkl")
 
 if os.path.exists("./Aave-Simulator/config.json"):
