@@ -28,18 +28,29 @@ tail -n 20 "$LOG_PATH"
 echo ""
 
 # Count processed recommendations (with proper error handling)
-# Try multiple patterns to find progress information
-PROCESSED_RAW=$(grep -E "(Processed|processed) [0-9]+/[0-9]+" "$LOG_PATH" 2>/dev/null | tail -1)
+# Look for the specific "Processed X/Y recommendations" pattern
+# Be very specific to avoid matching dates or other numbers in the log line
+PROCESSED_RAW=$(grep -E "Processed [0-9]+/[0-9]+ recommendations" "$LOG_PATH" 2>/dev/null | tail -1)
 
-# If not found, try alternative patterns
+# If not found (case-insensitive), try again
 if [ -z "$PROCESSED_RAW" ]; then
-    PROCESSED_RAW=$(grep -E "[0-9]+/[0-9]+.*recommendation" "$LOG_PATH" 2>/dev/null | tail -1)
+    PROCESSED_RAW=$(grep -iE "processed [0-9]+/[0-9]+ recommendations" "$LOG_PATH" 2>/dev/null | tail -1)
 fi
 
 if [ -n "$PROCESSED_RAW" ]; then
-    # Extract numbers from "X/Y" pattern
-    PROCESSED=$(echo "$PROCESSED_RAW" | grep -oE "[0-9]+" | head -1)
-    TOTAL=$(echo "$PROCESSED_RAW" | grep -oE "[0-9]+" | tail -1)
+    # Extract the X/Y pattern specifically - must be between "Processed " and " recommendations"
+    # Use sed to extract the pattern: "Processed X/Y recommendations" -> "X/Y"
+    PATTERN=$(echo "$PROCESSED_RAW" | sed -nE 's/.*Processed[[:space:]]+([0-9]+\/[0-9]+)[[:space:]]+recommendations.*/\1/p' | head -1)
+    
+    if [ -n "$PATTERN" ] && [[ "$PATTERN" =~ ^[0-9]+/[0-9]+$ ]]; then
+        # Extract numbers from the X/Y pattern
+        PROCESSED=$(echo "$PATTERN" | cut -d'/' -f1)
+        TOTAL=$(echo "$PATTERN" | cut -d'/' -f2)
+    else
+        # If pattern not found or invalid, set to zero (safer than guessing)
+        PROCESSED="0"
+        TOTAL="0"
+    fi
 else
     PROCESSED="0"
     TOTAL="0"
