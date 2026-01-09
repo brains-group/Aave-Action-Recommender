@@ -8,3 +8,4 @@ __pycache__/
 profiles/
 profiles
 analysis_output/
+.venv/
