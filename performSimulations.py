@@ -917,6 +917,9 @@ def updateAmountOrUSD(recommendation, amount = None, amountUSD = None):
 def update_recommendation_if_necessary(recommendation, results_without_recommendation):
     if recommendation['Index Event'] != 'repay':
         return recommendation
+    walletSymbolAmount = results_without_recommendation["final_state"]['wallet_balances'][recommendation['symbol']]
+    if walletSymbolAmount > recommendation['amount']:
+        updateAmountOrUSD(recommendation, amount = walletSymbolAmount)
     total_debt_usd = results_without_recommendation["final_state"]["total_debt_usd"]
     amount_usd = recommendation["amountUSD"]
     estimated_remaining_debt = max(0, total_debt_usd - amount_usd)
@@ -928,7 +931,6 @@ def update_recommendation_if_necessary(recommendation, results_without_recommend
     
     updateAmountOrUSD(recommendation, amountUSD = total_debt_usd*1.01)
 
-    walletSymbolAmount = results_without_recommendation["final_state"]['wallet_balances'][recommendation['symbol']]
     if walletSymbolAmount > recommendation['amount']:
         updateAmountOrUSD(recommendation, amount = walletSymbolAmount)
     
