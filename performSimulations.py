@@ -917,7 +917,17 @@ def updateAmountOrUSD(recommendation, amount = None, amountUSD = None):
 def update_recommendation_if_necessary(recommendation, results_without_recommendation):
     if recommendation['Index Event'] != 'repay':
         return recommendation
-    walletSymbolAmount = results_without_recommendation["final_state"]['wallet_balances'][recommendation['symbol']]
+    
+    # Get symbol from recommendation - try 'symbol' first, then 'reserve' as fallback
+    symbol = recommendation.get('symbol') or recommendation.get('reserve')
+    if not symbol:
+        logger.warning(
+            f"Recommendation missing 'symbol' and 'reserve' fields for repay action. "
+            f"Available keys: {list(recommendation.keys())}. Skipping update."
+        )
+        return recommendation
+    
+    walletSymbolAmount = results_without_recommendation["final_state"]['wallet_balances'].get(symbol, 0)
     if walletSymbolAmount > recommendation['amount']:
         updateAmountOrUSD(recommendation, amount = walletSymbolAmount)
     total_debt_usd = results_without_recommendation["final_state"]["total_debt_usd"]
@@ -984,6 +994,17 @@ def normalize_recommendation(item):
             else:
                 raise ValueError(
                     f"Unexpected recommendation type: {type(recommendation)}, expected pandas.Series or dict"
+                )
+
+            # Ensure 'symbol' field exists (use 'reserve' as fallback if needed)
+            # This is needed because transactions in the simulator use 'symbol' but
+            # the training data may have 'reserve' instead
+            if 'symbol' not in recommendation_dict and 'reserve' in recommendation_dict:
+                recommendation_dict['symbol'] = recommendation_dict['reserve']
+            elif 'symbol' not in recommendation_dict and 'reserve' not in recommendation_dict:
+                logger.warning(
+                    f"Recommendation missing both 'symbol' and 'reserve' fields. "
+                    f"Available keys: {list(recommendation_dict.keys())}"
                 )
 
             # Validate liquidation_info is a dict
