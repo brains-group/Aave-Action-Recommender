@@ -926,10 +926,10 @@ def update_recommendation_if_necessary(recommendation, results_without_recommend
             f"Available keys: {list(recommendation.keys())}. Skipping update."
         )
         return recommendation
-    
-    walletSymbolAmount = results_without_recommendation["final_state"]['wallet_balances'].get(symbol, 0)
-    if walletSymbolAmount > recommendation['amount']:
-        updateAmountOrUSD(recommendation, amount = walletSymbolAmount)
+
+    # walletSymbolAmount = wallet_balances.get(symbol, 0)
+    # if walletSymbolAmount < recommendation['amount']:
+    #     updateAmountOrUSD(recommendation, amount = walletSymbolAmount)
     total_debt_usd = results_without_recommendation["final_state"]["total_debt_usd"]
     amount_usd = recommendation["amountUSD"]
     estimated_remaining_debt = max(0, total_debt_usd - amount_usd)
@@ -938,11 +938,20 @@ def update_recommendation_if_necessary(recommendation, results_without_recommend
         and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD
     ):
         return recommendation
+    elif recommendation['Index Event'] != 'repay':
+        return None
     
-    updateAmountOrUSD(recommendation, amountUSD = total_debt_usd*1.01)
+    wallet_balances = results_without_recommendation["final_state"]['wallet_balances']
+    maxWalletSymbol = max(wallet_balances, key=wallet_balances.get)
+    maxWalletValue = wallet_balances.get(maxWalletSymbol, 0)
 
-    if walletSymbolAmount > recommendation['amount']:
-        updateAmountOrUSD(recommendation, amount = walletSymbolAmount)
+    recommendation['symbol'] = recommendation['reserve'] = maxWalletSymbol
+    updateAmountOrUSD(recommendation, amount = maxWalletValue)
+    
+    # updateAmountOrUSD(recommendation, amountUSD = total_debt_usd*1.01)
+
+    # if walletSymbolAmount < recommendation['amount']:
+    #     updateAmountOrUSD(recommendation, amount = walletSymbolAmount)
     
     return recommendation
 
@@ -1416,6 +1425,10 @@ def process_recommendation(item):
         recommendation = update_recommendation_if_necessary(
             recommendation, results_without_recommendation
         )
+
+        if recommendation is None:
+            logger.info(f"Skipping Non-Repay Recommendation in Dust Scenario for user {user}.")
+            return {"success": False, "stats_updates": stats_updates, "user": user, "skipped": True}
 
         # Prepare a copy of the profile that includes the recommendation transaction
         # This simulates: "What happens if user takes the recommendation?"
