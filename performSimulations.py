@@ -897,6 +897,22 @@ def _print_stats_summary(s: dict, title: str):
             f"  - Correctly predicted next action: {matches_ts} / {total_ts} ({matches_ts/total_ts:.1%})"
         )
 
+def updateAmountOrUSD(recommendation, amount = None, amountUSD = None):
+    if amount is None and amountUSD is None:
+        return
+    price = recommendation["priceInUSD"]
+    recommendation["amount"] = amount if amount is not None else amountUSD / price
+    recommendation["amountUSD"] = amountUSD if amountUSD is not None else amount * price
+
+    # Use numpy.log1p when available; fall back to math.log1p if `np` is shadowed.
+    try:
+        log1p_fn = np.log1p
+    except Exception:
+        import math
+
+        log1p_fn = math.log1p
+    recommendation["logAmountUSD"] = float(log1p_fn(float(recommendation["amountUSD"])))
+    recommendation["logAmount"] = float(log1p_fn(float(recommendation["amount"])))
 
 def update_recommendation_if_necessary(recommendation, results_without_recommendation):
     if recommendation['action'] != 'Repay':
@@ -909,26 +925,14 @@ def update_recommendation_if_necessary(recommendation, results_without_recommend
         and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD
     ):
         return recommendation
+    
+    updateAmountOrUSD(recommendation, amountUSD = total_debt_usd*1.01)
 
-    recommendation["amountUSD"] = total_debt_usd
-    try:
-        log1p_fn = np.log1p
-    except Exception:
-        import math
-
-        log1p_fn = math.log1p
-    recommendation["logAmountUSD"] = float(log1p_fn(float(recommendation["amountUSD"])))
-
-    price = recommendation["priceInUSD"]
-    recommendation["amount"] = amount_usd / price
-    # Use numpy.log1p when available; fall back to math.log1p if `np` is shadowed.
-    try:
-        log1p_fn = np.log1p
-    except Exception:
-        import math
-
-        log1p_fn = math.log1p
-    recommendation["logAmount"] = float(log1p_fn(float(recommendation["amount"])))
+    walletSymbolAmount = results_without_recommendation["final_state"]['wallet_balances'][recommendation['symbol']]
+    if walletSymbolAmount > recommendation['amount']:
+        updateAmountOrUSD(recommendation, amount = walletSymbolAmount)
+    
+    return recommendation
 
 
 def process_recommendation_wrapper(args_tuple):
