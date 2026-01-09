@@ -61,7 +61,7 @@ from profile_gen.wallet_inference import WalletInferencer
 from tools.run_single_simulation import run_simulation
 
 PROFILES_DIR = (
-    "../data/IDEA_DeFi_Research/Data/Lending_Protocols/Aave/V3/Polygon/aave-simulator/"
+    "./profiles/"
 )
 
 # Constants
