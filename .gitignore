@@ -1,4 +1,5 @@
 cache/
+cache*/
 data/
 backup/
 pyEnv.sh
