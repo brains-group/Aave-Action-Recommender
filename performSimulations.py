@@ -113,6 +113,8 @@ def get_new_stats_dict():
         "improved": 0,
         "worsened": 0,
         "no_change": 0,
+        "no_change_with_liquidation": 0,
+        "no_change_without_liquidation": 0,
         "time_deltas": [],
         # New stats for prediction validation
         "at_risk": 0,
@@ -218,6 +220,7 @@ def load_results_cache(recommendation, suffix, get_results):
     """Load cached simulation results or compute and cache them."""
     key = f"{recommendation['user']}_{int(recommendation.get('timestamp', 0))}_{suffix}"
     results_cache_file = Path(SIMULATION_RESULTS_CACHE_DIR) / f"{key}.pkl"
+    logger.debug("Checkpoint 7.6")
 
     # Try to load from cache
     if results_cache_file.exists():
@@ -226,9 +229,11 @@ def load_results_cache(recommendation, suffix, get_results):
                 return pkl.load(f)
         except Exception as e:
             logger.debug(f"Failed to load cache {results_cache_file}: {e}")
+    logger.debug("Checkpoint 7.7")
 
     # Cache miss - compute results
     results = get_results()
+    logger.debug("Checkpoint 7.8")
 
     # Save to cache (best effort)
     try:
@@ -237,6 +242,7 @@ def load_results_cache(recommendation, suffix, get_results):
             pkl.dump(results, f)
     except Exception as e:
         logger.debug(f"Failed to save cache {results_cache_file}: {e}")
+    logger.debug("Checkpoint 7.9")
 
     return results
 
@@ -341,6 +347,15 @@ def _print_stats_summary(s: dict, title: str):
     logger.info(f"Improved (avoided liquidation):     {improved} ({pct(improved)})")
     logger.info(f"Worsened (introduced liquidation):  {worsened} ({pct(worsened)})")
     logger.info(f"No change:                          {no_change} ({pct(no_change)})")
+    if no_change > 0:
+        no_change_with_liq = s.get("no_change_with_liquidation", 0)
+        no_change_without_liq = s.get("no_change_without_liquidation", 0)
+        logger.info(
+            f"  - Both liquidated:                {no_change_with_liq} ({pct(no_change_with_liq)})"
+        )
+        logger.info(
+            f"  - Neither liquidated:             {no_change_without_liq} ({pct(no_change_without_liq)})"
+        )
 
     # Display liquidation type breakdown
     if liq_without > 0 or liq_with > 0:
@@ -1159,6 +1174,7 @@ def process_recommendation(item):
                 "error": f"Profile file not found for user {user}",
                 "stats_updates": {},
             }
+        logger.debug("Checkpoint 1")
 
         try:
             with user_profile_file.open("r") as f:
@@ -1177,6 +1193,7 @@ def process_recommendation(item):
                 "error": f"Error reading profile: {e}",
                 "stats_updates": {},
             }
+        logger.debug("Checkpoint 2")
 
         if not isinstance(user_profile, dict):
             logger.error(
@@ -1187,10 +1204,12 @@ def process_recommendation(item):
                 "error": f"Invalid profile format: {type(user_profile)}",
                 "stats_updates": {},
             }
+        logger.debug("Checkpoint 3")
 
         if "transactions" not in user_profile:
             logger.warning(f"Profile for user {user} missing 'transactions' field")
             user_profile["transactions"] = []
+        logger.debug("Checkpoint 4")
 
         # Use the recommendation timestamp as the cutoff point
         # Transactions <= this timestamp are historical, > this timestamp are future
@@ -1206,6 +1225,7 @@ def process_recommendation(item):
                 "error": "No transactions in profile",
                 "stats_updates": {},
             }
+        logger.debug("Checkpoint 5")
 
         # Filter transactions in a single pass: historical (<= timestamp) vs future (> timestamp)
         # Note: We use <= for historical to include transactions at exactly the recommendation time
@@ -1219,6 +1239,7 @@ def process_recommendation(item):
                 historical_transactions.append(tx)
             else:
                 future_transactions.append(tx)
+        logger.debug("Checkpoint 6")
 
         # Sort future transactions by timestamp (needed for first liquidation lookup)
         if future_transactions:
@@ -1233,6 +1254,7 @@ def process_recommendation(item):
                 f"No historical transactions found before recommendation timestamp {recommendation_timestamp} for user {user}"
             )
             # Still proceed - maybe the user has no history yet
+        logger.debug("Checkpoint 7")
 
         last_transaction_before_recommendation = (
             user_profile["transactions"][-1]
@@ -1390,6 +1412,7 @@ def process_recommendation(item):
         else:
             # No future transactions, simulate 7 days ahead to see if liquidation occurs
             lookahead_seconds = DEFAULT_LOOKAHEAD_SECONDS
+        logger.debug("Checkpoint 7.5")
 
         # Run (or load) results without the recommendation
         # This simulates: "What happens if user continues without taking the recommendation?"
@@ -1421,15 +1444,18 @@ def process_recommendation(item):
                 "error": f"Simulation without recommendation failed: {e}",
                 "stats_updates": {},
             }
+        logger.debug("Checkpoint 8")
 
         recommendation = update_recommendation_if_necessary(
             recommendation, results_without_recommendation
         )
+        logger.debug("Checkpoint 9")
 
         if recommendation is None:
             logger.info(f"Skipping Non-Repay Recommendation in Dust Scenario for user {user}.")
             return {"success": False, "stats_updates": stats_updates, "user": user, "skipped": True}
 
+        logger.debug("Checkpoint 10")
         # Prepare a copy of the profile that includes the recommendation transaction
         # This simulates: "What happens if user takes the recommendation?"
         try:
@@ -1467,6 +1493,7 @@ def process_recommendation(item):
                 "error": f"Error preparing profile with recommendation: {e}",
                 "stats_updates": {},
             }
+        logger.debug("Checkpoint 11")
 
         # Run (or load) results with the recommendation
         # Uses same sophisticated liquidation detection as above (consistent with Aave-Simulator)
@@ -1492,6 +1519,7 @@ def process_recommendation(item):
                 "error": f"Simulation with recommendation failed: {e}",
                 "stats_updates": {},
             }
+        logger.debug("Checkpoint 12")
 
         # Update runtime stats with simulation results
         liquidation_stats_without = results_without_recommendation.get(
@@ -1759,6 +1787,10 @@ def process_recommendation(item):
         else:
             for bucket in stat_buckets:
                 bucket["no_change"] += 1
+                if lw:
+                    bucket["no_change_with_liquidation"] += 1
+                else:
+                    bucket["no_change_without_liquidation"] += 1
 
         t_without = results_without_recommendation.get("liquidation_stats", {}).get(
             "time_to_liquidation"

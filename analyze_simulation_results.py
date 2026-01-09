@@ -58,6 +58,8 @@ def print_summary_table(stats, title="Summary"):
         ("Improved (avoided liquidation)", "improved"),
         ("Worsened (introduced liquidation)", "worsened"),
         ("No change", "no_change"),
+        ("  - Both liquidated", "no_change_with_liquidation"),
+        ("  - Neither liquidated", "no_change_without_liquidation"),
     ]
     
     for label, key in metrics:
