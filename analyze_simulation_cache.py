@@ -18,6 +18,7 @@ from collections import defaultdict, Counter
 import numpy as np
 import pandas as pd
 
+import analyze_simulation_results
 try:
     import matplotlib.pyplot as plt
     import matplotlib
@@ -198,54 +199,6 @@ def analyze_final_states(results):
     return analysis
 
 
-def print_summary_statistics(results, title="SIMULATION CACHE ANALYSIS SUMMARY"):
-    """Print summary statistics from analysis."""
-    print("\n" + "="*80)
-    print(title)
-    print("="*80)
-    
-    total = len(results)
-    outcomes = Counter(r['outcome'] for r in results)
-    
-    print(f"\nTotal simulation pairs analyzed: {total}")
-    print("\nOutcome Distribution:")
-    for outcome, count in outcomes.most_common():
-        pct = (count / total * 100) if total > 0 else 0
-        print(f"  {outcome:20s}: {count:5d} ({pct:5.2f}%)")
-    
-    # Liquidation statistics
-    liq_without = sum(1 for r in results if r['liq_without'])
-    liq_with = sum(1 for r in results if r['liq_with'])
-    improved = sum(1 for r in results if r['outcome'] == 'improved')
-    worsened = sum(1 for r in results if r['outcome'] == 'worsened')
-    
-    print(f"\nLiquidation Statistics:")
-    print(f"  Liquidated WITHOUT recommendation: {liq_without} ({liq_without/total*100:.2f}%)")
-    print(f"  Liquidated WITH recommendation:    {liq_with} ({liq_with/total*100:.2f}%)")
-    print(f"  Improved (avoided liquidation):     {improved} ({improved/total*100:.2f}%)")
-    print(f"  Worsened (introduced liquidation):  {worsened} ({worsened/total*100:.2f}%)")
-    
-    # Dust liquidation analysis
-    dust_cases = find_dust_liquidation_cases(results)
-    print(f"\nDust Liquidation Cases: {len(dust_cases)}")
-    
-    # Analyze final states
-    state_analysis = analyze_final_states(results)
-    
-    print(f"\nFinal State Analysis:")
-    for category in ['improved', 'worsened', 'dust_liquidations']:
-        cases = state_analysis[category]
-        if cases:
-            debts = [c['total_debt_usd'] for c in cases if c['total_debt_usd'] > 0]
-            collaterals = [c['total_collateral_usd'] for c in cases if c['total_collateral_usd'] > 0]
-            
-            print(f"\n  {category.upper()} ({len(cases)} cases):")
-            if debts:
-                print(f"    Debt USD:      min={min(debts):.4f}, max={max(debts):.2f}, median={np.median(debts):.2f}")
-            if collaterals:
-                print(f"    Collateral USD: min={min(collaterals):.4f}, max={max(collaterals):.2f}, median={np.median(collaterals):.2f}")
-
-
 def find_successful_patterns(results):
     """Find patterns in successful recommendations."""
     improved = [r for r in results if r['outcome'] == 'improved']
@@ -404,6 +357,163 @@ def create_visualizations(results, output_dir):
     print(f"\n✓ Visualizations saved to: {output_dir}")
 
 
+def build_stats_from_results(results):
+    """Build comprehensive stats dictionary from results list."""
+    stats = {
+        "overall": {
+            "processed": 0,
+            "liquidated_without": 0,
+            "liquidated_with": 0,
+            "improved": 0,
+            "worsened": 0,
+            "no_change": 0,
+            "no_change_with_liquidation": 0,
+            "no_change_without_liquidation": 0,
+            "time_deltas": [],
+            "liquidation_reasons_without": [],
+            "liquidation_reasons_with": [],
+            "dust_liquidations_without": 0,
+            "dust_liquidations_with": 0,
+            "hf_based_liquidations_without": 0,
+            "hf_based_liquidations_with": 0,
+            "threshold_based_liquidations_without": 0,
+            "threshold_based_liquidations_with": 0,
+            "strategy_comparisons": {
+                "without": {},
+                "with": {},
+                "consensus_agreement_without": [],
+                "consensus_agreement_with": [],
+                "best_strategy_counts": {"without": {}, "with": {}},
+                "per_simulation_without": [],
+                "per_simulation_with": [],
+            },
+        }
+    }
+    
+    overall = stats["overall"]
+    
+    for r in results:
+        overall["processed"] += 1
+        
+        liq_without = r['liq_without']
+        liq_with = r['liq_with']
+        outcome = r['outcome']
+        
+        if liq_without:
+            overall["liquidated_without"] += 1
+            reason = r['liquidation_stats_without'].get('liquidation_reason', '')
+            if reason:
+                overall["liquidation_reasons_without"].append(reason)
+                reason_lower = reason.lower()
+                if 'dust' in reason_lower:
+                    overall["dust_liquidations_without"] += 1
+                if 'hf' in reason_lower or 'health factor' in reason_lower or 'margin' in reason_lower:
+                    overall["hf_based_liquidations_without"] += 1
+                if 'threshold' in reason_lower or 'effective lt' in reason_lower:
+                    overall["threshold_based_liquidations_without"] += 1
+
+        if liq_with:
+            overall["liquidated_with"] += 1
+            reason = r['liquidation_stats_with'].get('liquidation_reason', '')
+            if reason:
+                overall["liquidation_reasons_with"].append(reason)
+                reason_lower = reason.lower()
+                if 'dust' in reason_lower:
+                    overall["dust_liquidations_with"] += 1
+                if 'hf' in reason_lower or 'health factor' in reason_lower or 'margin' in reason_lower:
+                    overall["hf_based_liquidations_with"] += 1
+                if 'threshold' in reason_lower or 'effective lt' in reason_lower:
+                    overall["threshold_based_liquidations_with"] += 1
+
+        if outcome == 'improved':
+            overall["improved"] += 1
+        elif outcome == 'worsened':
+            overall["worsened"] += 1
+        else:
+            overall["no_change"] += 1
+            if liq_without:
+                overall["no_change_with_liquidation"] += 1
+            else:
+                overall["no_change_without_liquidation"] += 1
+
+        # Time deltas
+        t_without = r['liquidation_stats_without'].get('time_to_liquidation')
+        t_with = r['liquidation_stats_with'].get('time_to_liquidation')
+        if t_without is not None and t_with is not None:
+            try:
+                overall["time_deltas"].append(float(t_with) - float(t_without))
+            except:
+                pass
+
+        # Strategy Comparisons
+        for scenario, liq_stats in [('without', r['liquidation_stats_without']), ('with', r['liquidation_stats_with'])]:
+            strat_comp = liq_stats.get('strategy_comparison', {})
+            if not strat_comp:
+                continue
+                
+            consensus = strat_comp.get('consensus', {})
+            results_by_strategy = strat_comp.get('results_by_strategy', {})
+            best_strategy = strat_comp.get('best_strategy')
+            
+            overall["strategy_comparisons"][f"consensus_agreement_{scenario}"].append(consensus.get('agreement_rate', 0.0))
+            
+            if best_strategy:
+                counts = overall["strategy_comparisons"]["best_strategy_counts"][scenario]
+                counts[best_strategy] = counts.get(best_strategy, 0) + 1
+            
+            # Per-simulation data
+            per_sim_data = {
+                "user": r['user'],
+                "strategies_detected": [],
+                "strategies_not_detected": [],
+                "times": {},
+                "checks": {},
+                "consensus_agreement": consensus.get('agreement_rate', 0.0)
+            }
+            
+            for s_name, s_res in results_by_strategy.items():
+                # Update aggregate strategy stats
+                if s_name not in overall["strategy_comparisons"][scenario]:
+                    overall["strategy_comparisons"][scenario][s_name] = {"detected": 0, "checks": 0, "time": []}
+                
+                s_agg = overall["strategy_comparisons"][scenario][s_name]
+                s_agg["checks"] += s_res.get('checks_performed', 0)
+                
+                if s_res.get('liquidated'):
+                    s_agg["detected"] += 1
+                    if s_res.get('time_to_liquidation') is not None:
+                        s_agg["time"].append(s_res.get('time_to_liquidation'))
+                    
+                    per_sim_data["strategies_detected"].append(s_name)
+                    if s_res.get('time_to_liquidation') is not None:
+                        per_sim_data["times"][s_name] = s_res.get('time_to_liquidation')
+                else:
+                    per_sim_data["strategies_not_detected"].append(s_name)
+                
+                per_sim_data["checks"][s_name] = s_res.get('checks_performed', 0)
+            
+            if per_sim_data["strategies_detected"] or per_sim_data["strategies_not_detected"]:
+                overall["strategy_comparisons"][f"per_simulation_{scenario}"].append(per_sim_data)
+
+    return stats
+
+
+def print_final_state_analysis(results, title="Final State Analysis"):
+    """Print analysis of final states."""
+    state_analysis = analyze_final_states(results)
+    print(f"\n{title}:")
+    for category in ['improved', 'worsened', 'dust_liquidations']:
+        cases = state_analysis[category]
+        if cases:
+            debts = [c['total_debt_usd'] for c in cases if c['total_debt_usd'] > 0]
+            collaterals = [c['total_collateral_usd'] for c in cases if c['total_collateral_usd'] > 0]
+            print(f"\n  {category.upper()} ({len(cases)} cases):")
+            if debts:
+                print(f"    Debt USD:      min={min(debts):.4f}, max={max(debts):.2f}, median={np.median(debts):.2f}")
+            if collaterals:
+                print(f"    Collateral USD: min={min(collaterals):.4f}, max={max(collaterals):.2f}, median={np.median(collaterals):.2f}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Analyze cached simulation results for recommendation insights"
@@ -442,13 +552,38 @@ def main():
         print("No valid simulation pairs found!")
         return
     
-    # Print summary statistics
-    print_summary_statistics(results, "FULL SIMULATION RESULTS (Including Dust)")
+    # Build stats and print summary using analyze_simulation_results
+    stats = build_stats_from_results(results)
+    
+    print("\n" + "="*80)
+    print("FULL SIMULATION RESULTS (Including Dust)")
+    print("="*80)
+    
+    analyze_simulation_results.print_summary_table(stats)
+    analyze_simulation_results.analyze_liquidation_reasons(stats)
+    analyze_simulation_results.analyze_strategy_comparison(stats)
+    analyze_simulation_results.analyze_per_simulation_breakdown(stats)
+    analyze_simulation_results.analyze_time_deltas(stats)
+    
+    # Print cache-specific analysis
+    print_final_state_analysis(results, "Final State Analysis (All Results)")
     
     # Filter dust and print summary
     results_no_dust = filter_dust_results(results)
     if len(results_no_dust) < len(results):
-        print_summary_statistics(results_no_dust, "FILTERED RESULTS (Excluding Dust Liquidations)")
+        print("\n" + "="*80)
+        print("FILTERED RESULTS (Excluding Dust Liquidations)")
+        print("="*80)
+        stats_no_dust = build_stats_from_results(results_no_dust)
+        analyze_simulation_results.print_summary_table(stats_no_dust)
+        analyze_simulation_results.analyze_liquidation_reasons(stats_no_dust)
+        analyze_simulation_results.analyze_strategy_comparison(stats_no_dust)
+        analyze_simulation_results.analyze_per_simulation_breakdown(stats_no_dust)
+        analyze_simulation_results.analyze_time_deltas(stats_no_dust)
+        analyze_simulation_results.analyze_risk_predictions(stats_no_dust)
+        
+        print_final_state_analysis(results_no_dust, "Final State Analysis (No Dust)")
+        analyze_simulation_results.compare_statistics(stats, stats_no_dust)
     else:
         print("\nNo dust liquidations found to filter.")
     

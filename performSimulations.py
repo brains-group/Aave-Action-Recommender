@@ -125,6 +125,8 @@ def get_new_stats_dict():
         "immediate_risk_no_future": 0,
         "at_risk_eventual_liquidation_count": 0,
         "at_risk_time_to_liquidation": [],
+        "not_at_risk_time_to_liquidation": [],
+        "liquidation_prediction_correlation": [],
         "at_risk_no_future_liquidation_count": 0,
         "at_risk_no_future": 0,
         "total_predictions_checked_mrp": 0,
@@ -955,13 +957,18 @@ def update_recommendation_if_necessary(recommendation, results_without_recommend
     total_debt_usd = results_without_recommendation["final_state"]["total_debt_usd"]
     amount_usd = recommendation["amountUSD"]
     estimated_remaining_debt = max(0, total_debt_usd - amount_usd)
-    if not (
-        estimated_remaining_debt > 0
-        and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD
-    ):
-        return recommendation
-    elif (
-        recommendation["Index Event"] != "repay"
+    # if not (
+    #     estimated_remaining_debt > 0
+    #     and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD
+    # ):
+    #     return recommendation
+    # elif (
+    #     recommendation["Index Event"] != "repay"
+    # ):  # Comment out these if and return statements for potential performance increase for deposit recommendations
+    #     return None
+    if (
+        recommendation["Index Event"] != "repay" and (estimated_remaining_debt > 0
+        and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD)
     ):  # Comment out these if and return statements for potential performance increase for deposit recommendations
         return None
 
@@ -1309,11 +1316,13 @@ def process_recommendation(item):
         # Pre-compute liquidation check (single pass, only need first)
         has_future_liquidations = False
         first_liquidation = None
+        actual_time_to_liquidation = None
         if future_transactions:
             for tx in future_transactions:
                 if tx.get("action", "").lower() == "liquidated":
                     has_future_liquidations = True
                     first_liquidation = tx
+                    actual_time_to_liquidation = first_liquidation["timestamp"] - cutoff_timestamp
                     break  # Only need first liquidation
 
         # Update stats - consolidated logic
@@ -1323,6 +1332,8 @@ def process_recommendation(item):
             if has_future_liquidations:
                 for bucket in stat_buckets:
                     bucket["not_at_risk_but_liquidated"] += 1
+                    if actual_time_to_liquidation is not None:
+                        bucket.setdefault("not_at_risk_time_to_liquidation", []).append(actual_time_to_liquidation)
         else:  # is_at_risk is True
             for bucket in stat_buckets:
                 bucket["at_risk"] += 1
@@ -1360,6 +1371,16 @@ def process_recommendation(item):
             else:
                 for bucket in stat_buckets:
                     bucket["at_risk_no_future"] += 1
+
+            # Capture correlation data (regardless of risk classification)
+            if has_future_liquidations and actual_time_to_liquidation is not None and most_recent_predictions:
+                predicted_time = most_recent_predictions.get("Liquidated")
+                if predicted_time is not None:
+                    for bucket in stat_buckets:
+                        bucket.setdefault("liquidation_prediction_correlation", []).append({
+                            "predicted": float(predicted_time),
+                            "actual": float(actual_time_to_liquidation)
+                        })
 
             # Cache next action for prediction checks (compute once, use for both)
             next_actual_action_lower = None
@@ -1535,6 +1556,13 @@ def process_recommendation(item):
                 "stats_updates": {},
             }
         logger.debug("Checkpoint 12")
+
+        if (results_with_recommendation['final_state']["total_debt_usd"] == 0 and results_without_recommendation['liquidation_stats']["liquidated"]) or results_without_recommendation['liquidation_stats']["liquidation_reason"] == "dust_liquidation (total_debt_usd (0.000000) < $1.00)":
+            return {
+                "success": False,
+                "error": f"Liquidated despite 0 debt.",
+                "stats_updates": {},
+            }
 
         # Update runtime stats with simulation results
         liquidation_stats_without = results_without_recommendation.get(

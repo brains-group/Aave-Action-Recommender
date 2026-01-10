@@ -252,6 +252,271 @@ def analyze_strategy_comparison(stats):
                     print(f"  - {strategy}: {count} times ({pct:.1f}%)")
 
 
+def analyze_time_deltas(stats):
+    """Analyze time-to-liquidation deltas."""
+    overall = stats.get('overall', {})
+    deltas = overall.get("time_deltas", [])
+    
+    if not deltas:
+        print("\nNo time-to-liquidation delta data available.")
+        return
+
+    print(f"\n{'='*80}")
+    print("Time-to-Liquidation Deltas (With - Without)".center(80))
+    print(f"{'='*80}")
+
+    try:
+        deltas_array = np.array(deltas, dtype=float)
+        avg = float(np.mean(deltas_array))
+        sd = float(np.std(deltas_array))
+        median = float(np.median(deltas_array))
+        
+        print(f"Count: {len(deltas)}")
+        print(f"Average Delta: {avg:.2f}s")
+        print(f"Median Delta:  {median:.2f}s")
+        print(f"Std Dev:       {sd:.2f}s")
+        print(f"Min:           {min(deltas):.2f}s")
+        print(f"Max:           {max(deltas):.2f}s")
+
+        # Breakdown by direction
+        positive = deltas_array[deltas_array > 0]
+        negative = deltas_array[deltas_array < 0]
+        
+        print(f"\nBreakdown:")
+        print(f"  Delayed Liquidation (> 0s):     {len(positive)} ({len(positive)/len(deltas):.1%})")
+        if len(positive) > 0:
+            print(f"    Avg Delay: {np.mean(positive):.2f}s ({np.mean(positive)/3600:.2f}h)")
+            print(f"    Max Delay: {np.max(positive):.2f}s ({np.max(positive)/3600:.2f}h)")
+            
+        print(f"  Accelerated Liquidation (< 0s): {len(negative)} ({len(negative)/len(deltas):.1%})")
+        if len(negative) > 0:
+            print(f"    Avg Acceleration: {abs(np.mean(negative)):.2f}s ({abs(np.mean(negative))/3600:.2f}h)")
+            print(f"    Max Acceleration: {abs(np.min(negative)):.2f}s ({abs(np.min(negative))/3600:.2f}h)")
+    except Exception as e:
+        print(f"Could not compute time-delta stats: {e}")
+
+
+def analyze_risk_predictions(stats):
+    """Analyze risk prediction accuracy."""
+    overall = stats.get('overall', {})
+    
+    print(f"\n{'='*80}")
+    print("Liquidation Risk Prediction Analysis".center(80))
+    print(f"{'='*80}")
+    
+    at_risk = overall.get("at_risk", 0)
+    not_at_risk = overall.get("not_at_risk", 0)
+    total_risk_assessed = at_risk + not_at_risk
+    
+    if total_risk_assessed == 0:
+        print("No risk assessment data available.")
+        return
+
+    print(f"Total recommendations assessed for risk: {total_risk_assessed}")
+    
+    # --- Eventual Liquidation Metrics ---
+    print(f"\n1. Eventual Liquidation Prediction (Time Horizon: Any future time)")
+    print("-" * 60)
+    
+    tp_eventual = overall.get("at_risk_eventual_liquidation_count", 0)
+    fp_eventual = overall.get("at_risk_no_future_liquidation_count", 0)
+    fn_eventual = overall.get("not_at_risk_but_liquidated", 0)
+    # TN is approximate: not_at_risk includes those with no future, assuming they are safe
+    tn_eventual = not_at_risk - fn_eventual
+    
+    precision_eventual = tp_eventual / (tp_eventual + fp_eventual) if (tp_eventual + fp_eventual) > 0 else 0.0
+    recall_eventual = tp_eventual / (tp_eventual + fn_eventual) if (tp_eventual + fn_eventual) > 0 else 0.0
+    f1_eventual = 2 * (precision_eventual * recall_eventual) / (precision_eventual + recall_eventual) if (precision_eventual + recall_eventual) > 0 else 0.0
+    accuracy_eventual = (tp_eventual + tn_eventual) / total_risk_assessed if total_risk_assessed > 0 else 0.0
+
+    print(f"  Confusion Matrix:")
+    print(f"    TP (Predicted Risk -> Liquidated):      {tp_eventual}")
+    print(f"    FP (Predicted Risk -> Not Liquidated):  {fp_eventual}")
+    print(f"    FN (Predicted Safe -> Liquidated):      {fn_eventual}")
+    print(f"    TN (Predicted Safe -> Not Liquidated):  {tn_eventual}")
+    
+    print(f"\n  Metrics:")
+    print(f"    Precision: {precision_eventual:.2%} (Reliability of risk flag)")
+    print(f"    Recall:    {recall_eventual:.2%} (Coverage of actual liquidations)")
+    print(f"    F1 Score:  {f1_eventual:.4f}")
+    print(f"    Accuracy:  {accuracy_eventual:.2%}")
+
+    # --- Immediate Liquidation Metrics ---
+    print(f"\n2. Immediate Liquidation Prediction (Time Horizon: Next transaction)")
+    print("-" * 60)
+    
+    at_immediate_risk = overall.get("at_immediate_risk", 0)
+    
+    if at_immediate_risk > 0:
+        tp_immediate = overall.get("immediate_risk_followed_by_liquidation", 0)
+        fp_immediate = overall.get("immediate_risk_not_followed_by_liquidation", 0)
+        # We don't track FN for immediate risk explicitly in current stats
+        
+        precision_immediate = tp_immediate / (tp_immediate + fp_immediate) if (tp_immediate + fp_immediate) > 0 else 0.0
+        
+        print(f"  Confusion Matrix (Partial):")
+        print(f"    TP (Predicted Immediate -> Next is Liq):     {tp_immediate}")
+        print(f"    FP (Predicted Immediate -> Next is Not Liq): {fp_immediate}")
+        print(f"    FN (Predicted Safe -> Next is Liq):          N/A (Not tracked)")
+        
+        print(f"\n  Metrics:")
+        print(f"    Precision: {precision_immediate:.2%} (Reliability of immediate risk flag)")
+        print(f"    Recall:    N/A")
+    else:
+        print("  No immediate risk predictions made.")
+
+    # --- Time to Liquidation Stats ---
+    times_to_liq = overall.get("at_risk_time_to_liquidation", [])
+    times_missed = overall.get("not_at_risk_time_to_liquidation", [])
+    
+    if times_to_liq or times_missed:
+        print(f"\n3. Time to Liquidation Analysis (Actual time until liquidation occurred)")
+        print("-" * 60)
+        
+        def print_time_stats(times, label):
+            if not times:
+                print(f"  {label}: No data")
+                return
+            arr = np.array(times)
+            avg_days = np.mean(arr) / (24 * 3600)
+            med_days = np.median(arr) / (24 * 3600)
+            std_days = np.std(arr) / (24 * 3600)
+            min_days = np.min(arr) / (24 * 3600)
+            max_days = np.max(arr) / (24 * 3600)
+            print(f"  {label} (n={len(times)}):")
+            print(f"    Mean:   {avg_days:.2f} days")
+            print(f"    Median: {med_days:.2f} days")
+            print(f"    StdDev: {std_days:.2f} days")
+            print(f"    Range:  {min_days:.2f} - {max_days:.2f} days")
+            
+        print_time_stats(times_to_liq, "Correctly Predicted (True Positives)")
+        print_time_stats(times_missed, "Missed Predictions (False Negatives)")
+        
+        if times_to_liq and times_missed:
+            m1 = np.mean(times_to_liq)
+            m0 = np.mean(times_missed)
+            diff_days = (m1 - m0) / (24 * 3600)
+            
+            print(f"\n  Comparison:")
+            direction = "LATER" if diff_days > 0 else "SOONER"
+            print(f"    Difference in means (TP - FN): {diff_days:.2f} days")
+            print(f"    Interpretation: Correctly predicted liquidations happen {abs(diff_days):.2f} days {direction} than missed ones.")
+
+    # --- Next Action Prediction ---
+    print(f"\n4. Next Action Prediction Accuracy")
+    print("-" * 60)
+    total_mrp = overall.get("total_predictions_checked_mrp", 0)
+    matches_mrp = overall.get("prediction_matches_next_action_mrp", 0)
+    if total_mrp > 0:
+        print(f"  Based on `most_recent_predictions` (lowest time-to-event):")
+        print(f"    Correctly predicted next action: {matches_mrp} / {total_mrp} ({matches_mrp/total_mrp:.1%})")
+
+    total_ts = overall.get("total_predictions_checked_ts", 0)
+    matches_ts = overall.get("prediction_matches_next_action_ts", 0)
+    if total_ts > 0:
+        print(f"  Based on `trend_slopes` (most negative slope):")
+        print(f"    Correctly predicted next action: {matches_ts} / {total_ts} ({matches_ts/total_ts:.1%})")
+
+
+def analyze_per_simulation_breakdown(stats):
+    """Analyze per-simulation strategy breakdowns."""
+    overall = stats.get('overall', {})
+    strategy_comps = overall.get('strategy_comparisons', {})
+    
+    per_sim_without = strategy_comps.get("per_simulation_without", [])
+    per_sim_with = strategy_comps.get("per_simulation_with", [])
+
+    if not (per_sim_without or per_sim_with):
+        return
+
+    print(f"\n{'='*80}")
+    print("Per-Simulation Strategy Breakdown".center(80))
+    print(f"{'='*80}")
+
+    def print_samples(samples, title):
+        print(f"\n{title}")
+        if not samples:
+            print("  No cases found.")
+            return
+            
+        for i, sim in enumerate(samples[:10]):
+            user_id = sim.get("user", "unknown")
+            detected = sim.get("strategies_detected", [])
+            not_detected = sim.get("strategies_not_detected", [])
+            times = sim.get("times", {})
+            consensus_agreement = sim.get("consensus_agreement", 0.0)
+            
+            detected_sorted = sorted(detected) if detected else []
+            not_detected_sorted = sorted(not_detected) if not_detected else []
+            
+            print(f"\n  User {user_id}:")
+            print(f"    Strategies DETECTED liquidation: {', '.join(detected_sorted)} ({len(detected)}/6)")
+            if detected and times:
+                sorted_times = sorted(times.items())
+                time_strs = [f"{name}: {t/(24*3600):.2f} days" for name, t in sorted_times]
+                print(f"    Liquidation times: {', '.join(time_strs)}")
+            if not_detected:
+                print(f"    Strategies NOT detected: {', '.join(not_detected_sorted)} ({len(not_detected)}/6)")
+            print(f"    Consensus agreement: {consensus_agreement:.1%}")
+            
+        if len(samples) > 10:
+            print(f"\n  ... and {len(samples) - 10} more cases")
+
+    disagreement_without = [s for s in per_sim_without if 0 < len(s.get("strategies_detected", [])) < 6]
+    print_samples(disagreement_without, "Sample Cases with Strategy Disagreement (WITHOUT recommendation):")
+
+    disagreement_with = [s for s in per_sim_with if 0 < len(s.get("strategies_detected", [])) < 6]
+    print_samples(disagreement_with, "Sample Cases with Strategy Disagreement (WITH recommendation):")
+
+    print("\nStrategy Agreement Statistics:")
+    if per_sim_without:
+        partial = len(disagreement_without)
+        full = len(per_sim_without) - partial
+        print(f"  WITHOUT recommendation:")
+        print(f"    Full agreement: {full}/{len(per_sim_without)} ({full/len(per_sim_without):.1%})")
+        print(f"    Partial agreement: {partial}/{len(per_sim_without)} ({partial/len(per_sim_without):.1%})")
+    
+    if per_sim_with:
+        partial = len(disagreement_with)
+        full = len(per_sim_with) - partial
+        print(f"  WITH recommendation:")
+        print(f"    Full agreement: {full}/{len(per_sim_with)} ({full/len(per_sim_with):.1%})")
+        print(f"    Partial agreement: {partial}/{len(per_sim_with)} ({partial/len(per_sim_with):.1%})")
+
+    def print_liquidations(samples, title):
+        print(f"\n{title}")
+        liquidated = [s for s in samples if s.get("strategies_detected")]
+        if not liquidated:
+            print("  No liquidations detected.")
+            return
+            
+        for i, sim in enumerate(liquidated[:5]):
+            user_id = sim.get("user", "unknown")
+            detected = sim.get("strategies_detected", [])
+            times = sim.get("times", {})
+            checks = sim.get("checks", {})
+            detected_sorted = sorted(detected) if detected else []
+            
+            print(f"\n  User {user_id}:")
+            print(f"    Detected by: {', '.join(detected_sorted)} ({len(detected)}/6 strategies)")
+            if times:
+                print(f"    Liquidation times by strategy:")
+                for strategy_name in detected_sorted:
+                    if strategy_name in times:
+                        time_days = times[strategy_name] / (24 * 3600)
+                        check_count = checks.get(strategy_name, "N/A")
+                        print(f"      - {strategy_name}: {time_days:.2f} days ({check_count} checks)")
+            if len(detected) < 6:
+                not_detected = sim.get("strategies_not_detected", [])
+                print(f"    NOT detected by: {', '.join(sorted(not_detected))} ({len(not_detected)}/6 strategies)")
+        
+        if len(liquidated) > 5:
+            print(f"\n  ... and {len(liquidated) - 5} more liquidations")
+
+    print_liquidations(per_sim_without, "Sample Liquidations with Full Strategy Breakdown (WITHOUT recommendation):")
+    print_liquidations(per_sim_with, "Sample Liquidations with Full Strategy Breakdown (WITH recommendation):")
+
+
 def compare_statistics(stats, stats_no_dust):
     """Compare standard statistics with no-dust statistics."""
     print(f"\n{'='*80}")
@@ -438,6 +703,53 @@ def create_visualizations(stats, output_dir):
         fig.savefig(output_dir / 'action_pair_analysis.png', dpi=150, bbox_inches='tight')
         plt.close()
     
+    # NEW: Risk Analysis Plots
+    corr_data = overall.get("liquidation_prediction_correlation", [])
+    times_tp = overall.get("at_risk_time_to_liquidation", [])
+    times_fn = overall.get("not_at_risk_time_to_liquidation", [])
+
+    if corr_data or (times_tp and times_fn):
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        fig.suptitle('Risk Prediction Analysis', fontsize=16, fontweight='bold')
+
+        # Plot 1: Time Distribution (TP vs FN)
+        ax = axes[0]
+        data_to_plot = []
+        labels = []
+        if times_tp:
+            data_to_plot.append([t/(24*3600) for t in times_tp])
+            labels.append('True Positives\n(Predicted)')
+        if times_fn:
+            data_to_plot.append([t/(24*3600) for t in times_fn])
+            labels.append('False Negatives\n(Missed)')
+
+        if data_to_plot:
+            ax.boxplot(data_to_plot, labels=labels)
+            ax.set_ylabel('Time to Liquidation (Days)')
+            ax.set_title('Time to Liquidation Distribution')
+            ax.set_yscale('log')
+            ax.grid(axis='y', alpha=0.3)
+
+        # Plot 2: Correlation
+        ax = axes[1]
+        if corr_data:
+            predicted = [x['predicted'] / (24*3600) for x in corr_data]
+            actual = [x['actual'] / (24*3600) for x in corr_data]
+
+            ax.scatter(predicted, actual, alpha=0.5, s=15)
+            ax.set_xlabel('Predicted Return Period (Days)')
+            ax.set_ylabel('Actual Time to Liquidation (Days)')
+            ax.set_title('Prediction vs Actual Correlation')
+            ax.set_xscale('log')
+            ax.set_yscale('log')
+            ax.grid(True, alpha=0.3)
+        else:
+            ax.text(0.5, 0.5, 'No correlation data available', ha='center', va='center')
+
+        plt.tight_layout()
+        fig.savefig(output_dir / 'risk_analysis.png', dpi=150, bbox_inches='tight')
+        plt.close()
+
     print(f"\n✓ Visualizations saved to: {output_dir}")
 
 
@@ -458,6 +770,9 @@ def export_detailed_analysis(stats, output_file):
         analyze_liquidation_reasons(stats)
         analyze_action_pairs(stats)
         analyze_strategy_comparison(stats)
+        analyze_per_simulation_breakdown(stats)
+        analyze_time_deltas(stats)
+        analyze_risk_predictions(stats)
     
     sys.stdout = original_stdout
     print(f"✓ Detailed analysis exported to: {output_path}")
@@ -537,9 +852,28 @@ def main():
     
     # Analyze strategy comparison
     analyze_strategy_comparison(stats)
+
+    # Analyze per-simulation breakdown
+    analyze_per_simulation_breakdown(stats)
+
+    # Analyze time deltas
+    analyze_time_deltas(stats)
+
+    # Analyze risk predictions
+    analyze_risk_predictions(stats)
     
     # Compare with no-dust if available
     if stats_no_dust:
+        print("\n" + "="*80)
+        print("NO-DUST STATISTICS DETAILED ANALYSIS")
+        print("="*80)
+        print_summary_table(stats_no_dust)
+        analyze_liquidation_reasons(stats_no_dust)
+        analyze_action_pairs(stats_no_dust)
+        analyze_strategy_comparison(stats_no_dust)
+        analyze_per_simulation_breakdown(stats_no_dust)
+        analyze_time_deltas(stats_no_dust)
+        analyze_risk_predictions(stats_no_dust)
         compare_statistics(stats, stats_no_dust)
     
     # Create visualizations
