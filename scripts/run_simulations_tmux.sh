@@ -8,6 +8,7 @@ set -e
 NUM_WORKERS=${1:-16}
 LOG_FILE=${2:-"output7.log"}
 SESSION_NAME="simulations"
+CONDA_ENV=${CONDA_ENV:-"aave-action-recommender"}
 
 # Get script directory and project root (parent of scripts/)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,7 +31,8 @@ echo "Creating tmux session '$SESSION_NAME' with $NUM_WORKERS workers..."
 tmux new-session -d -s "$SESSION_NAME" -c "$PROJECT_ROOT"
 
 # Send command to run simulations (from project root)
-tmux send-keys -t "$SESSION_NAME" "cd $PROJECT_ROOT && python3 performSimulations.py --workers $NUM_WORKERS --log-file $LOG_FILE" C-m
+# Activate conda environment and run the script
+tmux send-keys -t "$SESSION_NAME" "cd $PROJECT_ROOT && source ~/.bashrc && conda activate $CONDA_ENV && python performSimulations.py --workers $NUM_WORKERS --log-file $LOG_FILE" C-m
 
 echo ""
 echo "✓ Simulations started in tmux session '$SESSION_NAME'"
