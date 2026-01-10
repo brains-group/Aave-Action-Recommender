@@ -136,6 +136,28 @@ def find_dust_liquidation_cases(results):
     return dust_cases
 
 
+def filter_dust_results(results):
+    """Filter out results where dust liquidation occurred in either branch."""
+    filtered = []
+    for r in results:
+        is_dust = False
+        # Check without recommendation
+        if r['liq_without']:
+            reason = r['liquidation_stats_without'].get('liquidation_reason', '')
+            if 'dust' in reason.lower():
+                is_dust = True
+        
+        # Check with recommendation
+        if r['liq_with']:
+            reason = r['liquidation_stats_with'].get('liquidation_reason', '')
+            if 'dust' in reason.lower():
+                is_dust = True
+                
+        if not is_dust:
+            filtered.append(r)
+    return filtered
+
+
 def analyze_final_states(results):
     """Analyze final states to understand position sizes."""
     analysis = {
@@ -176,10 +198,10 @@ def analyze_final_states(results):
     return analysis
 
 
-def print_summary_statistics(results):
+def print_summary_statistics(results, title="SIMULATION CACHE ANALYSIS SUMMARY"):
     """Print summary statistics from analysis."""
     print("\n" + "="*80)
-    print("SIMULATION CACHE ANALYSIS SUMMARY")
+    print(title)
     print("="*80)
     
     total = len(results)
@@ -421,7 +443,14 @@ def main():
         return
     
     # Print summary statistics
-    print_summary_statistics(results)
+    print_summary_statistics(results, "FULL SIMULATION RESULTS (Including Dust)")
+    
+    # Filter dust and print summary
+    results_no_dust = filter_dust_results(results)
+    if len(results_no_dust) < len(results):
+        print_summary_statistics(results_no_dust, "FILTERED RESULTS (Excluding Dust Liquidations)")
+    else:
+        print("\nNo dust liquidations found to filter.")
     
     # Find successful patterns
     find_successful_patterns(results)

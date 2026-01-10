@@ -60,9 +60,7 @@ from profile_gen.user_profile_generator import UserProfileGenerator
 from profile_gen.wallet_inference import WalletInferencer
 from tools.run_single_simulation import run_simulation
 
-PROFILES_DIR = (
-    "./profiles/"
-)
+PROFILES_DIR = "./profiles/"
 
 # Constants
 DEFAULT_LOOKAHEAD_DAYS = 7
@@ -71,6 +69,7 @@ DEFAULT_LOOKAHEAD_SECONDS = 86400 * DEFAULT_LOOKAHEAD_DAYS
 # Ensure cache directories exist at startup (performance optimization)
 Path(SIMULATION_RESULTS_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 
+# RECOMMENDATIONS_FILE = "./backup/recommendations.pkl"
 # Load recommendations with error handling
 try:
     if not os.path.exists(RECOMMENDATIONS_FILE):
@@ -209,6 +208,12 @@ def merge_stats_updates(base_stats, updates):
 
 
 stats = {
+    "overall": get_new_stats_dict(),
+    "by_index_action": {},
+    "by_outcome_action": {},
+    "by_action_pair": {},
+}
+stats_no_dust = {
     "overall": get_new_stats_dict(),
     "by_index_action": {},
     "by_outcome_action": {},
@@ -912,7 +917,8 @@ def _print_stats_summary(s: dict, title: str):
             f"  - Correctly predicted next action: {matches_ts} / {total_ts} ({matches_ts/total_ts:.1%})"
         )
 
-def updateAmountOrUSD(recommendation, amount = None, amountUSD = None):
+
+def updateAmountOrUSD(recommendation, amount=None, amountUSD=None):
     if amount is None and amountUSD is None:
         return
     price = recommendation["priceInUSD"]
@@ -929,12 +935,13 @@ def updateAmountOrUSD(recommendation, amount = None, amountUSD = None):
     recommendation["logAmountUSD"] = float(log1p_fn(float(recommendation["amountUSD"])))
     recommendation["logAmount"] = float(log1p_fn(float(recommendation["amount"])))
 
+
 def update_recommendation_if_necessary(recommendation, results_without_recommendation):
-    if recommendation['Index Event'] != 'repay':
+    if recommendation["Index Event"] != "repay":
         return recommendation
-    
+
     # Get symbol from recommendation - try 'symbol' first, then 'reserve' as fallback
-    symbol = recommendation.get('symbol') or recommendation.get('reserve')
+    symbol = recommendation.get("symbol") or recommendation.get("reserve")
     if not symbol:
         logger.warning(
             f"Recommendation missing 'symbol' and 'reserve' fields for repay action. "
@@ -953,21 +960,21 @@ def update_recommendation_if_necessary(recommendation, results_without_recommend
         and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD
     ):
         return recommendation
-    elif recommendation['Index Event'] != 'repay':
+    elif recommendation["Index Event"] != "repay": # Comment out these if and return statements for potential performance increase for deposit recommendations
         return None
-    
-    wallet_balances = results_without_recommendation["final_state"]['wallet_balances']
+
+    wallet_balances = results_without_recommendation["final_state"]["wallet_balances"]
     maxWalletSymbol = max(wallet_balances, key=wallet_balances.get)
     maxWalletValue = wallet_balances.get(maxWalletSymbol, 0)
 
-    recommendation['symbol'] = recommendation['reserve'] = maxWalletSymbol
-    updateAmountOrUSD(recommendation, amount = maxWalletValue)
-    
+    recommendation["symbol"] = recommendation["reserve"] = maxWalletSymbol
+    updateAmountOrUSD(recommendation, amount=maxWalletValue)
+
     # updateAmountOrUSD(recommendation, amountUSD = total_debt_usd*1.01)
 
     # if walletSymbolAmount < recommendation['amount']:
     #     updateAmountOrUSD(recommendation, amount = walletSymbolAmount)
-    
+
     return recommendation
 
 
@@ -1023,9 +1030,12 @@ def normalize_recommendation(item):
             # Ensure 'symbol' field exists (use 'reserve' as fallback if needed)
             # This is needed because transactions in the simulator use 'symbol' but
             # the training data may have 'reserve' instead
-            if 'symbol' not in recommendation_dict and 'reserve' in recommendation_dict:
-                recommendation_dict['symbol'] = recommendation_dict['reserve']
-            elif 'symbol' not in recommendation_dict and 'reserve' not in recommendation_dict:
+            if "symbol" not in recommendation_dict and "reserve" in recommendation_dict:
+                recommendation_dict["symbol"] = recommendation_dict["reserve"]
+            elif (
+                "symbol" not in recommendation_dict
+                and "reserve" not in recommendation_dict
+            ):
                 logger.warning(
                     f"Recommendation missing both 'symbol' and 'reserve' fields. "
                     f"Available keys: {list(recommendation_dict.keys())}"
@@ -1214,6 +1224,7 @@ def process_recommendation(item):
         # Use the recommendation timestamp as the cutoff point
         # Transactions <= this timestamp are historical, > this timestamp are future
         recommendation_timestamp = float(timestamp)
+        cutoff_timestamp = recommendation_timestamp - DEFAULT_TIME_DELTA_SECONDS
 
         # --- Start of new logic for prediction validation ---
         original_transactions = user_profile.get("transactions", [])
@@ -1235,7 +1246,7 @@ def process_recommendation(item):
             if not isinstance(tx, dict):
                 continue
             tx_timestamp = tx.get("timestamp", 0)
-            if tx_timestamp <= recommendation_timestamp:
+            if tx_timestamp <= cutoff_timestamp:
                 historical_transactions.append(tx)
             else:
                 future_transactions.append(tx)
@@ -1251,7 +1262,7 @@ def process_recommendation(item):
 
         if not user_profile["transactions"]:
             logger.warning(
-                f"No historical transactions found before recommendation timestamp {recommendation_timestamp} for user {user}"
+                f"No historical transactions found before cutoff timestamp {cutoff_timestamp} for user {user}"
             )
             # Still proceed - maybe the user has no history yet
         logger.debug("Checkpoint 7")
@@ -1259,7 +1270,7 @@ def process_recommendation(item):
         last_transaction_before_recommendation = (
             user_profile["transactions"][-1]
             if user_profile["transactions"]
-            else {"timestamp": recommendation_timestamp, "action": "Unknown"}
+            else {"timestamp": cutoff_timestamp, "action": "Unknown"}
         )
         last_action_before_recommendation = last_transaction_before_recommendation.get(
             "action", "Unknown"
@@ -1342,7 +1353,7 @@ def process_recommendation(item):
             if future_transactions:
                 if first_liquidation:
                     time_to_liquidation = (
-                        first_liquidation["timestamp"] - recommendation_timestamp
+                        first_liquidation["timestamp"] - cutoff_timestamp
                     )
                     for bucket in stat_buckets:
                         bucket["at_risk_time_to_liquidation"].append(
@@ -1404,8 +1415,8 @@ def process_recommendation(item):
         if future_transactions:
             last_future_tx_timestamp = future_transactions[-1].get("timestamp")
             if last_future_tx_timestamp:
-                lookahead_seconds = max(
-                    1, int(last_future_tx_timestamp - recommendation_timestamp)
+                lookahead_seconds = (
+                    max(1, int(last_future_tx_timestamp - cutoff_timestamp)) * 2
                 )
             else:
                 lookahead_seconds = DEFAULT_LOOKAHEAD_SECONDS
@@ -1452,8 +1463,15 @@ def process_recommendation(item):
         logger.debug("Checkpoint 9")
 
         if recommendation is None:
-            logger.info(f"Skipping Non-Repay Recommendation in Dust Scenario for user {user}.")
-            return {"success": False, "stats_updates": stats_updates, "user": user, "skipped": True}
+            logger.info(
+                f"Skipping Non-Repay Recommendation in Dust Scenario for user {user}."
+            )
+            return {
+                "success": False,
+                "stats_updates": stats_updates,
+                "user": user,
+                "skipped": True,
+            }
 
         logger.debug("Checkpoint 10")
         # Prepare a copy of the profile that includes the recommendation transaction
@@ -1497,13 +1515,16 @@ def process_recommendation(item):
 
         # Run (or load) results with the recommendation
         # Uses same sophisticated liquidation detection as above (consistent with Aave-Simulator)
+        lookahead_seconds_for_recommendation = (
+            lookahead_seconds - (recommendation_timestamp - cutoff_timestamp) * 2
+        )
         try:
             results_with_recommendation = load_results_cache(
                 recommendation,
                 "with",
                 lambda: run_simulation(
                     user_profile_with,
-                    lookahead_seconds=lookahead_seconds,
+                    lookahead_seconds=lookahead_seconds_for_recommendation,
                     output_file=outputFile,
                 ),
             )
@@ -1810,7 +1831,16 @@ def process_recommendation(item):
         for bucket in stat_buckets:
             bucket["processed"] += 1
 
-        return {"success": True, "stats_updates": stats_updates, "user": user}
+        stats_updates_no_dust = {}
+        if not (is_dust_without or is_dust_with):
+            stats_updates_no_dust = copy.deepcopy(stats_updates)
+
+        return {
+            "success": True,
+            "stats_updates": stats_updates,
+            "stats_updates_no_dust": stats_updates_no_dust,
+            "user": user,
+        }
 
     except Exception as e:
         logger.error(f"Error processing recommendation: {e}", exc_info=True)
@@ -1886,6 +1916,14 @@ if __name__ == "__main__":
                             if stats_updates:
                                 merge_stats_updates(stats, stats_updates)
 
+                            stats_updates_no_dust = result.get(
+                                "stats_updates_no_dust", {}
+                            )
+                            if stats_updates_no_dust:
+                                merge_stats_updates(
+                                    stats_no_dust, stats_updates_no_dust
+                                )
+
                         # Progress logging (optimized: compute elapsed once, reduce logging frequency)
                         if processed_count % 100 == 0:
                             elapsed = time.time() - start_time
@@ -1947,6 +1985,10 @@ if __name__ == "__main__":
                         if stats_updates:
                             merge_stats_updates(stats, stats_updates)
 
+                        stats_updates_no_dust = result.get("stats_updates_no_dust", {})
+                        if stats_updates_no_dust:
+                            merge_stats_updates(stats_no_dust, stats_updates_no_dust)
+
                     if processed_count % 100 == 0:
                         elapsed = time.time() - start_time
                         rate = processed_count / elapsed if elapsed > 0 else 0
@@ -1987,12 +2029,14 @@ if __name__ == "__main__":
 
             # Save statistics to JSON file
             save_statistics_to_json(stats)
+            save_statistics_to_json(stats_no_dust, suffix="no_dust")
 
     except KeyboardInterrupt:
         logger.warning("Processing interrupted by user")
         # Try to save statistics even if interrupted
         try:
             save_statistics_to_json(stats, suffix="INTERRUPTED")
+            save_statistics_to_json(stats_no_dust, suffix="no_dust_INTERRUPTED")
         except Exception as save_error:
             logger.error(f"Failed to save statistics after interruption: {save_error}")
     except Exception as e:
@@ -2000,6 +2044,7 @@ if __name__ == "__main__":
         # Try to save statistics even on fatal error
         try:
             save_statistics_to_json(stats, suffix="ERROR")
+            save_statistics_to_json(stats_no_dust, suffix="no_dust_ERROR")
         except Exception:
             pass
         raise

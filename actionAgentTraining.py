@@ -22,7 +22,7 @@ import logging
 # Module logger
 logger = logging.getLogger(__name__)
 # File handler: capture all log levels to file
-_file_handler = logging.FileHandler("output18.log")
+_file_handler = logging.FileHandler("output19.log")
 _file_handler.setLevel(logging.DEBUG)
 _file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
 logger.addHandler(_file_handler)
@@ -1150,7 +1150,10 @@ def determine_liquidation_risk(row: pd.Series):
 
 
 def generate_next_transaction(
-    prev_row: pd.Series, action_type: str, amount=10.0, time_delta_seconds=DEFAULT_TIME_DELTA_SECONDS
+    prev_row: pd.Series,
+    action_type: str,
+    amount=10.0,
+    time_delta_seconds=DEFAULT_TIME_DELTA_SECONDS,
 ):
     """
     Generates a new transaction row 'soon after' the previous row.
@@ -1262,31 +1265,41 @@ def generate_next_transaction(
     return new_row
 
 
-def _would_create_dust_position(row: pd.Series, recommended_action: str, amount: float) -> bool:
+def _would_create_dust_position(
+    row: pd.Series, recommended_action: str, amount: float
+) -> bool:
     """
     Estimate if a recommendation would create a dust position.
-    
+
     Based on analysis findings:
     - Dust liquidations: total_debt_usd < $1.00 or total_collateral_usd < $10.00
     - We estimate the final position after the recommendation
-    
+
     Args:
         row: Current user state row
         recommended_action: Action type (Deposit, Repay, etc.)
         amount: Recommended amount
-    
+
     Returns:
         True if recommendation would likely create dust position, False otherwise
     """
-    from utils.constants import MIN_RECOMMENDATION_DEBT_USD, MIN_RECOMMENDATION_COLLATERAL_USD, MIN_RECOMMENDATION_AMOUNT
-    
+    from utils.constants import (
+        MIN_RECOMMENDATION_DEBT_USD,
+        MIN_RECOMMENDATION_COLLATERAL_USD,
+        MIN_RECOMMENDATION_AMOUNT,
+    )
+
     action = recommended_action.lower()
-    amount_usd = amount * row.get("priceInUSD", 1.0) if pd.notna(row.get("priceInUSD")) else amount
-    
+    amount_usd = (
+        amount * row.get("priceInUSD", 1.0)
+        if pd.notna(row.get("priceInUSD"))
+        else amount
+    )
+
     # Check minimum amount threshold
     if amount_usd < MIN_RECOMMENDATION_AMOUNT:
         return True
-    
+
     # For Repay actions: estimate if remaining debt would be dust
     if action == "repay":
         # Estimate current debt from row data
@@ -1295,11 +1308,14 @@ def _would_create_dust_position(row: pd.Series, recommended_action: str, amount:
         if pd.isna(estimated_debt_usd) or estimated_debt_usd == 0:
             # Fallback: use a conservative estimate based on user stats
             estimated_debt_usd = row.get("userBorrowSumUSD", 0.0)
-        
+
         estimated_remaining_debt = max(0, estimated_debt_usd - amount_usd)
-        if estimated_remaining_debt > 0 and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD:
+        if (
+            estimated_remaining_debt > 0
+            and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD
+        ):
             return True
-    
+
     # For Deposit actions: estimate if position would result in dust collateral
     elif action == "deposit":
         # For deposits, we're adding collateral, so unlikely to create dust debt
@@ -1308,33 +1324,38 @@ def _would_create_dust_position(row: pd.Series, recommended_action: str, amount:
         estimated_debt_usd = row.get("totalDebtUSD", 0.0)
         if pd.isna(estimated_debt_usd):
             estimated_debt_usd = row.get("userBorrowSumUSD", 0.0)
-        
+
         # If debt is very small (< $1) and we're just depositing without repaying,
         # this might create a dust-like position
         if estimated_debt_usd > 0 and estimated_debt_usd < MIN_RECOMMENDATION_DEBT_USD:
             # Depositing while having dust debt could be problematic
             return True
-    
+
     # For Withdraw actions: check if withdrawal would leave insufficient collateral
     elif action == "withdraw":
         estimated_collateral_usd = row.get("totalCollateralUSD", 0.0)
         if pd.isna(estimated_collateral_usd):
             estimated_collateral_usd = row.get("userDepositSumUSD", 0.0)
-        
+
         estimated_remaining_collateral = max(0, estimated_collateral_usd - amount_usd)
-        if estimated_remaining_collateral > 0 and estimated_remaining_collateral < MIN_RECOMMENDATION_COLLATERAL_USD:
+        if (
+            estimated_remaining_collateral > 0
+            and estimated_remaining_collateral < MIN_RECOMMENDATION_COLLATERAL_USD
+        ):
             return True
-    
+
     return False
 
 
 def optimize_recommendation(row: pd.Series, recommended_action: str):
     from utils.constants import MIN_RECOMMENDATION_AMOUNT
-    
+
     # Start with minimum amount instead of fixed 10
     price = row.get("priceInUSD", 1.0) if pd.notna(row.get("priceInUSD")) else 1.0
-    initial_amount = max(MIN_RECOMMENDATION_AMOUNT / price, 10.0)  # At least MIN_RECOMMENDATION_AMOUNT USD or 10 tokens
-    
+    initial_amount = max(
+        MIN_RECOMMENDATION_AMOUNT / price, 10.0
+    )  # At least MIN_RECOMMENDATION_AMOUNT USD or 10 tokens
+
     new_action = generate_next_transaction(
         row,
         recommended_action,
@@ -1405,7 +1426,11 @@ def optimize_recommendation(row: pd.Series, recommended_action: str):
     # If risk remains, iteratively increase the amount and log single-action predictions
     max_iterations = 15  # Prevent infinite loops
     iteration = 0
-    while determine_liquidation_risk(new_action)[0] and new_action["amount"] < 100000 and iteration < max_iterations:
+    while (
+        determine_liquidation_risk(new_action)[0]
+        and new_action["amount"] < 100000
+        and iteration < max_iterations
+    ):
         # Check if current recommendation would create dust position
         if _would_create_dust_position(row, recommended_action, new_action["amount"]):
             # Skip dust-creating recommendations - increase amount before checking risk again
@@ -1414,10 +1439,12 @@ def optimize_recommendation(row: pd.Series, recommended_action: str):
                 recommended_action,
                 amount=new_action["amount"] * 2,
             )
-            logger.info("Skipped dust-creating amount, increased to: %s", new_action["amount"])
+            logger.info(
+                "Skipped dust-creating amount, increased to: %s", new_action["amount"]
+            )
             iteration += 1
             continue
-        
+
         # If not dust, increase amount to reduce liquidation risk
         new_action = generate_next_transaction(
             row,
@@ -1426,13 +1453,14 @@ def optimize_recommendation(row: pd.Series, recommended_action: str):
         )
         logger.info("Increased amount to: %s", new_action["amount"])
         iteration += 1
-    
+
     # Final check: if recommendation would create dust, return None or mark as invalid
     if _would_create_dust_position(row, recommended_action, new_action["amount"]):
         logger.warning(
             "Recommendation would create dust position (amount=%.2f, action=%s). "
             "Consider not recommending this action.",
-            new_action["amount"], recommended_action
+            new_action["amount"],
+            recommended_action,
         )
         # Still return the action, but log a warning
         # The caller can decide whether to filter it out
@@ -1508,7 +1536,7 @@ def recommend_action(row: pd.Series):
     provide a simple recommended action. Returns a dictionary
     with keys: liquidation_risk, is_at_risk, risk_trend,
     recommended_action, reason, details.
-    
+
     Now includes dust position filtering to prevent recommendations
     that would create tiny positions likely to be liquidated."""
 
@@ -1528,21 +1556,30 @@ def recommend_action(row: pd.Series):
 
     # Optimize recommendation with dust filtering
     optimized_action = optimize_recommendation(row, recommended_action)
-    
+
     # Final check: if optimized action would still create dust, log warning
     # The optimize_recommendation function already handles dust checking internally,
     # but we do a final verification here
     if optimized_action is not None:
-        amount_usd = optimized_action.get("amountUSD", 0.0) if hasattr(optimized_action, "get") else (
-            optimized_action["amount"] * optimized_action.get("priceInUSD", 1.0) if pd.notna(optimized_action.get("priceInUSD")) 
-            else optimized_action["amount"]
+        amount_usd = (
+            optimized_action.get("amountUSD", 0.0)
+            if hasattr(optimized_action, "get")
+            else (
+                optimized_action["amount"] * optimized_action.get("priceInUSD", 1.0)
+                if pd.notna(optimized_action.get("priceInUSD"))
+                else optimized_action["amount"]
+            )
         )
-        if _would_create_dust_position(row, recommended_action, optimized_action["amount"]):
+        if _would_create_dust_position(
+            row, recommended_action, optimized_action["amount"]
+        ):
             logger.warning(
                 "Final recommendation for user %s would create dust position. "
                 "Action: %s, Amount: %.2f (%.2f USD). Recommendation may be filtered out.",
-                row.get("user", "unknown"), recommended_action, 
-                optimized_action["amount"], amount_usd
+                row.get("user", "unknown"),
+                recommended_action,
+                optimized_action["amount"],
+                amount_usd,
             )
 
     return optimized_action, {
@@ -1762,15 +1799,38 @@ def get_train_set():
             train_set = pd.concat(
                 [
                     train_set,
-                    df[
-                        (df["timestamp"] >= min_train_date)
-                        & (df["timestamp"] < max_train_date)
-                    ].sample(n=300, random_state=seed),
+                    subsetInRange.sample(n=300, random_state=seed),
+                ],
+                ignore_index=True,
+            )
+        for index_event in EVENTS:
+            if index_event == "Liquidated":
+                continue
+            outcome_event = "Liquidated"
+            logger.info("Building train_set: processing %s->%s", index_event, outcome_event)
+            df = get_event_df(index_event, outcome_event)
+            if df is None:
+                continue
+            logger.info(f"Processing {index_event}->{outcome_event}")
+            logger.debug(f"Data has {len(df)} rows")
+            logger.debug(f"Min timestamp: {df['timestamp'].min()}")
+            logger.debug(f"Max timestamp: {df['timestamp'].max()}")
+            subsetInRange = df[
+                (df["timestamp"] >= min_train_date) & (df["timestamp"] < max_train_date)
+            ]
+            logger.debug(
+                f"Loaded {len(subsetInRange)} rows for {index_event}->{outcome_event}"
+            )
+            train_set = pd.concat(
+                [
+                    train_set,
+                    subsetInRange.sort_values(by="timeDiff").head(300),
                 ],
                 ignore_index=True,
             )
         with open(train_set_dir, "w") as f:
             train_set.to_csv(f, index=False)
+
     return train_set
 
 

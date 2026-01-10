@@ -252,6 +252,63 @@ def analyze_strategy_comparison(stats):
                     print(f"  - {strategy}: {count} times ({pct:.1f}%)")
 
 
+def compare_statistics(stats, stats_no_dust):
+    """Compare standard statistics with no-dust statistics."""
+    print(f"\n{'='*80}")
+    print("Standard vs No-Dust Comparison".center(80))
+    print(f"{'='*80}")
+    
+    std_overall = stats.get('overall', {})
+    nd_overall = stats_no_dust.get('overall', {})
+    
+    std_processed = std_overall.get('processed', 0)
+    nd_processed = nd_overall.get('processed', 0)
+    
+    if std_processed == 0:
+        print("No data in standard statistics.")
+        return
+
+    # Metrics to compare
+    metrics = [
+        ("Total Processed", "processed"),
+        ("Liquidated WITHOUT", "liquidated_without"),
+        ("Liquidated WITH", "liquidated_with"),
+        ("Improved", "improved"),
+        ("Worsened", "worsened"),
+        ("No Change", "no_change")
+    ]
+    
+    print(f"\n{'Metric':<30} {'Standard':<15} {'No-Dust':<15} {'Diff':<10}")
+    print("-" * 75)
+    
+    for label, key in metrics:
+        std_val = std_overall.get(key, 0)
+        nd_val = nd_overall.get(key, 0)
+        diff = nd_val - std_val
+        print(f"{label:<30} {std_val:<15} {nd_val:<15} {diff:<10}")
+
+    # Calculate rates
+    def get_rate(s, key):
+        p = s.get('processed', 0)
+        return (s.get(key, 0) / p * 100) if p > 0 else 0.0
+
+    print("-" * 75)
+    print("Rates (% of processed):")
+    
+    rate_metrics = [
+        ("Liquidation Rate (Without)", "liquidated_without"),
+        ("Liquidation Rate (With)", "liquidated_with"),
+        ("Improvement Rate", "improved"),
+        ("Worsening Rate", "worsened")
+    ]
+    
+    for label, key in rate_metrics:
+        std_rate = get_rate(std_overall, key)
+        nd_rate = get_rate(nd_overall, key)
+        diff = nd_rate - std_rate
+        print(f"{label:<30} {std_rate:>6.2f}%        {nd_rate:>6.2f}%        {diff:>+5.2f}%")
+
+
 def create_visualizations(stats, output_dir):
     """Create visualization plots."""
     if not HAS_MATPLOTLIB:
@@ -416,6 +473,12 @@ def main():
         help='Path to simulation statistics JSON file'
     )
     parser.add_argument(
+        '--no-dust-file',
+        type=str,
+        default=None,
+        help='Path to no-dust statistics JSON file (optional, for comparison)'
+    )
+    parser.add_argument(
         '--output-dir',
         type=str,
         default='./cache/analysis_output',
@@ -440,6 +503,29 @@ def main():
     stats = load_statistics(args.json_file)
     print("✓ Statistics loaded")
     
+    # Try to load no-dust stats
+    stats_no_dust = None
+    if args.no_dust_file:
+        print(f"Loading no-dust statistics from: {args.no_dust_file}")
+        stats_no_dust = load_statistics(args.no_dust_file)
+    else:
+        # Attempt auto-discovery based on naming convention
+        try:
+            p = Path(args.json_file)
+            name = p.name
+            # Standard: simulation_statistics_TIMESTAMP.json
+            # No Dust: simulation_statistics_no_dust_TIMESTAMP.json
+            if "simulation_statistics_" in name and "no_dust" not in name:
+                parts = name.split("simulation_statistics_")
+                if len(parts) == 2:
+                    no_dust_name = f"simulation_statistics_no_dust_{parts[1]}"
+                    no_dust_path = p.parent / no_dust_name
+                    if no_dust_path.exists():
+                        print(f"Auto-detected no-dust statistics: {no_dust_path}")
+                        stats_no_dust = load_statistics(no_dust_path)
+        except Exception as e:
+            print(f"Auto-detection of no-dust file failed: {e}")
+
     # Print summary
     print_summary_table(stats)
     
@@ -451,6 +537,10 @@ def main():
     
     # Analyze strategy comparison
     analyze_strategy_comparison(stats)
+    
+    # Compare with no-dust if available
+    if stats_no_dust:
+        compare_statistics(stats, stats_no_dust)
     
     # Create visualizations
     if not args.no_plots:
