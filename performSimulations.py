@@ -960,7 +960,9 @@ def update_recommendation_if_necessary(recommendation, results_without_recommend
         and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD
     ):
         return recommendation
-    elif recommendation["Index Event"] != "repay": # Comment out these if and return statements for potential performance increase for deposit recommendations
+    elif (
+        recommendation["Index Event"] != "repay"
+    ):  # Comment out these if and return statements for potential performance increase for deposit recommendations
         return None
 
     wallet_balances = results_without_recommendation["final_state"]["wallet_balances"]
@@ -1282,28 +1284,11 @@ def process_recommendation(item):
         )
         outcome_action = outcome_transaction.get("action", "Unknown")
 
-        # Build stats updates dictionary
-        stats_updates = {
-            "overall": get_new_stats_dict(),
-            "by_index_action": {},
-            "by_outcome_action": {},
-            "by_action_pair": {},
-        }
-
         # Initialize stat buckets
-        action_pair = (last_action_before_recommendation, outcome_action)
-        stats_updates["by_index_action"][
-            last_action_before_recommendation
-        ] = get_new_stats_dict()
-        stats_updates["by_outcome_action"][outcome_action] = get_new_stats_dict()
-        stats_updates["by_action_pair"][action_pair] = get_new_stats_dict()
-
-        overall_stats = stats_updates["overall"]
-        action_stats = stats_updates["by_index_action"][
-            last_action_before_recommendation
-        ]
-        outcome_action_stats = stats_updates["by_outcome_action"][outcome_action]
-        action_pair_stats = stats_updates["by_action_pair"][action_pair]
+        overall_stats = get_new_stats_dict()
+        action_stats = get_new_stats_dict()
+        outcome_action_stats = get_new_stats_dict()
+        action_pair_stats = get_new_stats_dict()
 
         stat_buckets = [
             overall_stats,
@@ -1311,6 +1296,15 @@ def process_recommendation(item):
             outcome_action_stats,
             action_pair_stats,
         ]
+
+        # Build stats updates dictionary
+        action_pair = (last_action_before_recommendation, outcome_action)
+        stats_updates = {
+            "overall": overall_stats,
+            "by_index_action": {last_action_before_recommendation: action_stats},
+            "by_outcome_action": {outcome_action: outcome_action_stats},
+            "by_action_pair": {action_pair: action_pair_stats},
+        }
 
         # Pre-compute liquidation check (single pass, only need first)
         has_future_liquidations = False
@@ -1515,8 +1509,8 @@ def process_recommendation(item):
 
         # Run (or load) results with the recommendation
         # Uses same sophisticated liquidation detection as above (consistent with Aave-Simulator)
-        lookahead_seconds_for_recommendation = (
-            lookahead_seconds - (recommendation_timestamp - cutoff_timestamp) * 2
+        lookahead_seconds_for_recommendation = max(
+            1, lookahead_seconds - (recommendation_timestamp - cutoff_timestamp) * 2
         )
         try:
             results_with_recommendation = load_results_cache(
