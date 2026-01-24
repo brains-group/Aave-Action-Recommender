@@ -1,11 +1,11 @@
 from constants import LABEL_TIME, LABEL_EVENT, DATA_CACHE_DIR
 import pandas as pd
-from typing import Optional
+from typing import Optional, Dict, Any
 import os
 import pickle as pkl
 import numpy as np
 
-PREPROCESS_CACHE: dict = {}
+PREPROCESS_CACHE: Dict[str, Any] = {}
 
 
 def preprocess(
@@ -14,8 +14,9 @@ def preprocess(
     model_date: Optional[int] = None,
 ):
     # Create unique prefix for saving/loading preprocessing objects
+    present_dataframe = train_df if train_df is not None else test_df
     unique_prefix = (
-        (present_dataframe := (train_df or test_df))["Index Event"].iloc[0]
+        present_dataframe["Index Event"].iloc[0]
         + "_"
         + present_dataframe["Outcome Event"].iloc[0]
         + (f"_{model_date}_" if model_date else "_")
@@ -52,6 +53,7 @@ def preprocess(
         train_targets = train_df[target_columns]
         train_features = train_df.drop(columns=cols_to_drop, errors="ignore")
 
+        # 1. Custom "Top 10" Categorical Logic
         categorical_cols = train_features.select_dtypes(
             include=["object", "category"]
         ).columns
@@ -65,35 +67,45 @@ def preprocess(
             )
             top10_dict[c] = top10
 
-        train_features_encoded = pd.get_dummies(train_features, drop_first=False)
-        train_features_encoded_columns = train_features_encoded.columns
-
+        # 2. Setup ColumnTransformer (Scaling + Encoding)
         numerical_cols = train_features.select_dtypes(include=np.number).columns
-        scaler = StandardScaler()
-        train_features_scaled = pd.DataFrame(
-            scaler.fit_transform(train_features[numerical_cols]),
-            columns=numerical_cols,
+
+        preprocessor = ColumnTransformer(
+            transformers=[
+                ("num", StandardScaler(), numerical_cols),
+                # handle_unknown='ignore' ensures test data with new categories doesn't crash
+                (
+                    "cat",
+                    OneHotEncoder(
+                        sparse_output=False, handle_unknown="ignore", dtype=np.float32
+                    ),
+                    categorical_cols,
+                ),
+            ],
+            verbose_feature_names_out=False,
+        )
+
+        # Apply transformations (Returns numpy array, we wrap back to DataFrame)
+        train_features_transformed = pd.DataFrame(
+            preprocessor.fit_transform(train_features),
+            columns=preprocessor.get_feature_names_out(),
             index=train_features.index,
         )
 
-        train_features_final = pd.concat(
-            [
-                train_features_scaled,
-                train_features_encoded.drop(columns=numerical_cols, errors="ignore"),
-            ],
-            axis=1,
-        )
+        # 3. Variance Threshold (Feature Selection)
+        selector = VarianceThreshold(threshold=0)
+        train_features_final = pd.DataFrame(
+            selector.fit_transform(train_features_transformed),
+            columns=selector.get_feature_names_out(),
+            index=train_features.index,
+        ).astype(np.float32)
 
-        cols_to_keep = train_features_final.columns[train_features_final.var() > 0]
-        train_features_final = train_features_final[cols_to_keep].astype(np.float32)
-
+        # 4. Save entire pipeline objects to cache
         PREPROCESS_CACHE[unique_prefix] = {
             "categorical_cols": categorical_cols,
             "top10_dict": top10_dict,
-            "train_features_encoded_columns": train_features_encoded_columns,
-            "numerical_cols": numerical_cols,
-            "scaler": scaler,
-            "cols_to_keep": cols_to_keep,
+            "preprocessor": preprocessor,  # Saves the fitted Scaler and Encoder
+            "selector": selector,  # Saves which columns were kept
         }
         with open(PREPROCESS_CACHE_PATH, "wb") as f:
             pkl.dump(PREPROCESS_CACHE[unique_prefix], f)
@@ -105,10 +117,13 @@ def preprocess(
             with open(PREPROCESS_CACHE_PATH, "rb") as f:
                 PREPROCESS_CACHE[unique_prefix] = pkl.load(f)
 
+        cache_data = PREPROCESS_CACHE[unique_prefix]
         test_features = test_df.drop(columns=cols_to_drop, errors="ignore")
 
-        top10_dict = PREPROCESS_CACHE[unique_prefix]["top10_dict"]
-        for c in PREPROCESS_CACHE[unique_prefix]["categorical_cols"]:
+        # 1. Apply "Top 10" Logic (using cached lists)
+        top10_dict = cache_data["top10_dict"]
+        categorical_cols = cache_data["categorical_cols"]
+        for c in categorical_cols:
             test_features[c] = (
                 test_features[c]
                 .where(
@@ -118,31 +133,21 @@ def preprocess(
                 .fillna("Other")
             )
 
-        test_features_encoded = pd.get_dummies(test_features, drop_first=False)
-        test_features_encoded = test_features_encoded.reindex(
-            columns=PREPROCESS_CACHE[unique_prefix]["train_features_encoded_columns"],
-            fill_value=0,
-        )
-
-        numerical_cols = PREPROCESS_CACHE[unique_prefix]["numerical_cols"]
-        test_features_scaled = pd.DataFrame(
-            PREPROCESS_CACHE[unique_prefix]["scaler"].transform(
-                test_features[numerical_cols]
-            ),
-            columns=numerical_cols,
+        # 2. Apply Preprocessor (Scaling + Encoding)
+        # transform() automatically handles alignment, zero-filling, and scaling using train stats
+        preprocessor = cache_data["preprocessor"]
+        test_features_transformed = pd.DataFrame(
+            preprocessor.transform(test_features),
+            columns=preprocessor.get_feature_names_out(),
             index=test_features.index,
         )
 
-        test_features_final = pd.concat(
-            [
-                test_features_scaled,
-                test_features_encoded.drop(columns=numerical_cols, errors="ignore"),
-            ],
-            axis=1,
-        )
-
-        test_features_final = test_features_final.reindex(
-            columns=PREPROCESS_CACHE[unique_prefix]["cols_to_keep"], fill_value=0
+        # 3. Apply Selector (Drop zero variance cols from train)
+        selector = cache_data["selector"]
+        test_features_final = pd.DataFrame(
+            selector.transform(test_features_transformed),
+            columns=selector.get_feature_names_out(),
+            index=test_features.index,
         ).astype(np.float32)
     else:
         test_features_final = None
