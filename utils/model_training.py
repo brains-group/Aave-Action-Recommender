@@ -1,6 +1,9 @@
-from constants import LABEL_TIME, LABEL_EVENT
+from constants import LABEL_TIME, LABEL_EVENT, DATA_CACHE_DIR
 import pandas as pd
 from typing import Optional
+import os
+import pickle as pkl
+import numpy as np
 
 PREPROCESS_CACHE: dict = {}
 
@@ -10,8 +13,17 @@ def preprocess(
     test_df: Optional[pd.DataFrame] = None,
     model_date: Optional[int] = None,
 ):
+    # Create unique prefix for saving/loading preprocessing objects
+    unique_prefix = (
+        (present_dataframe := (train_df or test_df))["Index Event"].iloc[0]
+        + "_"
+        + present_dataframe["Outcome Event"].iloc[0]
+        + (f"_{model_date}_" if model_date else "_")
+    )
+    PREPROCESS_CACHE_PATH = os.path.join(DATA_CACHE_DIR, unique_prefix)
+
     target_columns = [LABEL_TIME, LABEL_EVENT]
-    drop_cols = target_columns + [
+    cols_to_drop = target_columns + [
         "id",
         "user",
         "pool",
@@ -34,38 +46,105 @@ def preprocess(
                     model_date_value = model_date
 
             train_df = train_df[
-                (train_df["timestamp"] + train_df["timeDiff"])
-                <= model_date_value
+                (train_df["timestamp"] + train_df["timeDiff"]) <= model_date_value
             ]
 
         train_targets = train_df[target_columns]
-        # y_time = train_df[LABEL_TIME].astype(float).values
-        # y_event = train_df[LABEL_EVENT].astype(int).values
+        train_features = train_df.drop(columns=cols_to_drop, errors="ignore")
 
-    X_train = train_df.drop(columns=drop_cols, errors="ignore")
-    X_test = test_df.drop(columns=drop_cols, errors="ignore")
+        categorical_cols = train_features.select_dtypes(
+            include=["object", "category"]
+        ).columns
+        top10_dict = {}
+        for c in categorical_cols:
+            top10 = train_features[c].value_counts(dropna=True).nlargest(10).index
+            train_features[c] = (
+                train_features[c]
+                .where(train_features[c].isin(top10), "Other")
+                .fillna("Other")
+            )
+            top10_dict[c] = top10
 
-    # 類別與數值欄位區分
-    cat_cols = X_train.select_dtypes(include=["object", "category"]).columns
-    X_train, X_test = fit_top10_and_map(X_train, X_test, cat_cols)
-    dtr = pd.get_dummies(X_train, drop_first=False)
-    dte = pd.get_dummies(X_test, drop_first=False)
-    dte = dte.reindex(columns=dtr.columns, fill_value=0)
+        train_features_encoded = pd.get_dummies(train_features, drop_first=False)
+        train_features_encoded_columns = train_features_encoded.columns
 
-    num_cols = X_train.select_dtypes(include=np.number).columns
-    scaler = StandardScaler()
-    Xtr_num = pd.DataFrame(
-        scaler.fit_transform(X_train[num_cols]), columns=num_cols, index=X_train.index
-    )
-    Xte_num = pd.DataFrame(
-        scaler.transform(X_test[num_cols]), columns=num_cols, index=X_test.index
-    )
+        numerical_cols = train_features.select_dtypes(include=np.number).columns
+        scaler = StandardScaler()
+        train_features_scaled = pd.DataFrame(
+            scaler.fit_transform(train_features[numerical_cols]),
+            columns=numerical_cols,
+            index=train_features.index,
+        )
 
-    Xtr = pd.concat([Xtr_num, dtr.drop(columns=num_cols, errors="ignore")], axis=1)
-    Xte = pd.concat([Xte_num, dte.drop(columns=num_cols, errors="ignore")], axis=1)
+        train_features_final = pd.concat(
+            [
+                train_features_scaled,
+                train_features_encoded.drop(columns=numerical_cols, errors="ignore"),
+            ],
+            axis=1,
+        )
 
-    nz_cols = Xtr.columns[Xtr.var() > 0]
-    Xtr = Xtr[nz_cols].astype(np.float32)
-    Xte = Xte.reindex(columns=nz_cols, fill_value=0).astype(np.float32)
+        cols_to_keep = train_features_final.columns[train_features_final.var() > 0]
+        train_features_final = train_features_final[cols_to_keep].astype(np.float32)
 
-    return Xtr, Xte, y_time, y_event
+        PREPROCESS_CACHE[unique_prefix] = {
+            "categorical_cols": categorical_cols,
+            "top10_dict": top10_dict,
+            "train_features_encoded_columns": train_features_encoded_columns,
+            "numerical_cols": numerical_cols,
+            "scaler": scaler,
+            "cols_to_keep": cols_to_keep,
+        }
+        with open(PREPROCESS_CACHE_PATH, "wb") as f:
+            pkl.dump(PREPROCESS_CACHE[unique_prefix], f)
+    else:
+        train_features_final = train_targets = None
+
+    if test_df is not None:
+        if unique_prefix not in PREPROCESS_CACHE:
+            with open(PREPROCESS_CACHE_PATH, "rb") as f:
+                PREPROCESS_CACHE[unique_prefix] = pkl.load(f)
+
+        test_features = test_df.drop(columns=cols_to_drop, errors="ignore")
+
+        top10_dict = PREPROCESS_CACHE[unique_prefix]["top10_dict"]
+        for c in PREPROCESS_CACHE[unique_prefix]["categorical_cols"]:
+            test_features[c] = (
+                test_features[c]
+                .where(
+                    test_features[c].isin(top10_dict[c]),
+                    "Other",
+                )
+                .fillna("Other")
+            )
+
+        test_features_encoded = pd.get_dummies(test_features, drop_first=False)
+        test_features_encoded = test_features_encoded.reindex(
+            columns=PREPROCESS_CACHE[unique_prefix]["train_features_encoded_columns"],
+            fill_value=0,
+        )
+
+        numerical_cols = PREPROCESS_CACHE[unique_prefix]["numerical_cols"]
+        test_features_scaled = pd.DataFrame(
+            PREPROCESS_CACHE[unique_prefix]["scaler"].transform(
+                test_features[numerical_cols]
+            ),
+            columns=numerical_cols,
+            index=test_features.index,
+        )
+
+        test_features_final = pd.concat(
+            [
+                test_features_scaled,
+                test_features_encoded.drop(columns=numerical_cols, errors="ignore"),
+            ],
+            axis=1,
+        )
+
+        test_features_final = test_features_final.reindex(
+            columns=PREPROCESS_CACHE[unique_prefix]["cols_to_keep"], fill_value=0
+        ).astype(np.float32)
+    else:
+        test_features_final = None
+
+    return train_features_final, train_targets, test_features_final
