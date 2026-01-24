@@ -10,3 +10,4 @@ profiles/
 profiles
 analysis_output/
 .venv/
+config.json

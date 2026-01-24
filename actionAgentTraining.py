@@ -17,74 +17,14 @@ from itertools import chain
 import glob
 import pyreadr
 import json
-import logging
-
-# Module logger
-logger = logging.getLogger(__name__)
-# File handler: capture all log levels to file
-_file_handler = logging.FileHandler("output19.log")
-_file_handler.setLevel(logging.DEBUG)
-_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-logger.addHandler(_file_handler)
-# # Console handler: show INFO+ by default
-# _console_handler = logging.StreamHandler()
-# _console_handler.setLevel(logging.INFO)
-# _console_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
-# logger.addHandler(_console_handler)
-# Ensure logger forwards all levels to handlers (file will receive DEBUG+)
-logger.setLevel(logging.DEBUG)
-
-
-def set_log_file(path: str, file_level: str | int = "DEBUG"):
-    """Change the log file path and level. File will receive all levels at or above file_level."""
-    # remove old file handler
-    global _file_handler
-    try:
-        logger.removeHandler(_file_handler)
-    except Exception:
-        pass
-    _file_handler = logging.FileHandler(path)
-    if isinstance(file_level, str):
-        lvl = getattr(logging, file_level.upper(), logging.DEBUG)
-    else:
-        lvl = int(file_level)
-    _file_handler.setLevel(lvl)
-    _file_handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    )
-    logger.addHandler(_file_handler)
-
+from utils.logger import logger
+from utils.data import get_event_df
 
 # %%
 from utils.constants import *
 
 seed = 42
 np.random.seed(seed)
-
-# In-memory cache for event CSV dataframes to avoid repeated disk I/O
-EVENT_DF_CACHE: dict = {}
-
-
-def get_event_df(index_event: str, outcome_event: str) -> Optional[pd.DataFrame]:
-    """Return cached DataFrame for an event pair, loading it once if needed.
-
-    Returns None if the CSV does not exist.
-    """
-    key = (index_event, outcome_event)
-    if key in EVENT_DF_CACHE:
-        return EVENT_DF_CACHE[key]
-    event_path = os.path.join(DATA_PATH, index_event, outcome_event, "data.csv")
-    if not os.path.exists(event_path):
-        EVENT_DF_CACHE[key] = None
-        return None
-    try:
-        df = pd.read_csv(event_path)
-    except Exception as e:
-        logger.warning(f"Warning: failed to read {event_path}: {e}")
-        EVENT_DF_CACHE[key] = None
-        return None
-    EVENT_DF_CACHE[key] = df
-    return df
 
 
 # Module-level cache for loaded/trained models to reuse across calls
@@ -270,71 +210,6 @@ def preprocess(
     return train_features_final, train_targets, test_processed_features
 
 
-# def compute_baseline_hazard(model, X_train, y_train):
-#     """
-#     Computes the Breslow estimator and the final hazard rate for extrapolation.
-#     """
-#     log_partial_hazard = model.predict(X_train, output_margin=True)
-
-#     # This prevents outliers from pushing all normal data into the 'zero risk' clipping zone.
-#     log_shift = np.median(log_partial_hazard)
-#     log_partial_hazard_centered = log_partial_hazard - log_shift
-
-#     # Clip to prevent extreme values (e.g., -50 to 50 is plenty of range)
-#     log_partial_hazard_centered = np.clip(log_partial_hazard_centered, -50, 50)
-#     partial_hazard = np.exp(log_partial_hazard_centered)
-
-#     durations = y_train["timeDiff"].values
-#     events = y_train["status"].values
-
-#     idx = np.argsort(durations)
-#     durations = durations[idx]
-#     events = events[idx]
-#     partial_hazard = partial_hazard[idx]
-
-#     unique_durations = np.unique(durations)
-#     baseline_cum_hazard = np.zeros_like(unique_durations, dtype=float)
-
-#     current_risk_sum = np.sum(partial_hazard)
-#     for i, t in enumerate(unique_durations):
-#         indices_at_t = durations == t
-#         events_at_t = np.sum(events[indices_at_t])
-#         baseline_cum_hazard[i] = events_at_t / (current_risk_sum + 1e-9)
-#         current_risk_sum -= np.sum(partial_hazard[indices_at_t])
-#         # Ensure it doesn't dip below zero due to precision errors
-#         current_risk_sum = max(current_risk_sum, 1e-9)
-
-#     cum_baseline_hazard = np.cumsum(baseline_cum_hazard)
-
-#     # --- Memory Optimization ---
-#     # If we have too many time points, downsample the curve to 2,000 points.
-#     # This significantly reduces memory in the integration step.
-#     MAX_POINTS = 2000
-#     if len(unique_durations) > MAX_POINTS:
-#         indices = np.linspace(0, len(unique_durations) - 1, MAX_POINTS).astype(int)
-#         unique_durations = unique_durations[indices]
-#         cum_baseline_hazard = cum_baseline_hazard[indices]
-
-#     # --- Extrapolation Logic ---
-#     # Calculate the average hazard rate over the last 20% of the timeline
-#     # to avoid being overly sensitive to a single late-term event.
-#     if len(unique_durations) > 5:
-#         tail_idx = int(len(unique_durations) * 0.8)
-#         time_delta = unique_durations[-1] - unique_durations[tail_idx]
-#         hazard_delta = cum_baseline_hazard[-1] - cum_baseline_hazard[tail_idx]
-#         final_rate = hazard_delta / (time_delta + 1e-9)
-#     else:
-#         final_rate = 0.0
-
-#     return {
-#         "times": unique_durations,
-#         "cum_hazards": cum_baseline_hazard,
-#         "final_rate": final_rate,
-#         "max_time": unique_durations[-1],
-#         "log_shift": log_shift,  # IMPORTANT
-#     }
-
-
 def compute_baseline_hazard(model, X_train, y_train):
     """
     Computes the Breslow estimator using Vectorized operations.
@@ -406,175 +281,6 @@ def compute_baseline_hazard(model, X_train, y_train):
         "max_time": unique_durations[-1],
         "log_shift": log_shift,
     }
-
-
-def get_survival_probability(model, X_test, baseline_meta, time_target):
-    """
-    Predicts survival probability with linear extrapolation for future times.
-    """
-    times = baseline_meta["times"]
-    cum_hazards = baseline_meta["cum_hazards"]
-    max_t = baseline_meta["max_time"]
-    final_rate = baseline_meta["final_rate"]
-
-    # Get the baseline cumulative hazard for time_target
-    if time_target <= max_t:
-        idx = np.searchsorted(times, time_target) - 1
-        h0_t = cum_hazards[max(0, idx)]
-    else:
-        # EXTRAPOLATION: Last known hazard + (excess time * rate)
-        excess_time = time_target - max_t
-        h0_t = cum_hazards[-1] + (excess_time * final_rate)
-
-    log_margin = model.predict(X_test, output_margin=True)
-
-    # Apply the same shift and clipping
-    log_margin_centered = log_margin - baseline_meta["log_shift"]
-    log_margin_centered = np.clip(log_margin_centered, -50, 50)
-
-    relative_risk = np.exp(log_margin_centered)
-
-    # Survival Probability: S(t) = exp(-H_0(t) * exp(shifted_log_margin))
-    # We clip the exponent here too to prevent S(t) from becoming exactly 0 or 1 too fast
-    exponent = -h0_t * relative_risk
-    exponent = np.clip(exponent, -50, 0)  # cannot have positive survival exponent
-
-    return np.exp(exponent)
-
-
-# def get_expected_time_to_event(model, X_test, baseline_meta, max_prediction_days=365):
-#     """
-#     Calculates the expected time (in seconds) until the event occurs.
-#     """
-#     times = baseline_meta["times"]
-#     cum_hazards = baseline_meta["cum_hazards"]
-#     max_t = baseline_meta["max_time"]
-#     final_rate = baseline_meta["final_rate"]
-#     log_shift = baseline_meta["log_shift"]
-
-#     # Get relative risk (exp(log_margin - shift))
-#     log_margin = model.predict(X_test, output_margin=True)
-#     relative_risk = np.exp(np.clip(log_margin - log_shift, -50, 50))
-
-#     # We will integrate S(t) using the trapezoidal rule or a step-sum
-#     # 1. Calculate survival at every 'jump' point in the training data
-#     # S(t) = exp(-H0(t) * RR)
-#     # Use clip to prevent overflow in the exponent
-#     exponents = -cum_hazards[:, np.newaxis] * relative_risk
-#     surv_at_jumps = np.exp(
-#         np.clip(exponents, -50, 0)
-#     )  # Shape: (len_times, len_samples)
-
-#     # 2. Area under the curve for the 'known' training range
-#     # Widths of time intervals
-#     time_deltas = np.diff(times, prepend=0)
-#     expected_time = np.sum(surv_at_jumps * time_deltas[:, np.newaxis], axis=0)
-
-#     # 3. Handle the tail (Extrapolation)
-#     # If the hazard rate > 0, the remaining area is the integral of exp(-rate * t)
-#     # Integral from max_t to infinity of [S(max_t) * exp(-final_rate * RR * (t - max_t))]
-#     # This equals: S(max_t) / (final_rate * RR)
-#     s_max = surv_at_jumps[-1, :]
-#     effective_rate = (final_rate * relative_risk) + 1e-9
-#     tail_area = s_max / effective_rate
-
-#     # Cap the tail area to a reasonable horizon (e.g., 1 year) to prevent
-#     # infinite expectations if the final_rate is near zero.
-#     max_seconds = max_prediction_days * 24 * 3600
-#     expected_time = np.clip(expected_time + tail_area, 0, max_seconds)
-
-#     return expected_time
-
-# def get_expected_time_to_event(model, X_test, baseline_meta, max_prediction_days=365, batch_size=2000):
-#     """
-#     Calculates expected time in a memory-efficient batched manner.
-#     """
-#     times = baseline_meta["times"]
-#     cum_hazards = baseline_meta["cum_hazards"]
-#     max_t = baseline_meta["max_time"]
-#     final_rate = baseline_meta["final_rate"]
-#     log_shift = baseline_meta["log_shift"]
-
-#     log_margin = model.predict(X_test, output_margin=True)
-#     relative_risk = np.exp(np.clip(log_margin - log_shift, -50, 50))
-
-#     n_samples = len(relative_risk)
-#     expected_times = np.zeros(n_samples)
-#     time_deltas = np.diff(times, prepend=0)
-
-#     # Process transactions in small batches to keep RAM usage low
-#     for start in range(0, n_samples, batch_size):
-#         end = min(start + batch_size, n_samples)
-#         rr_batch = relative_risk[start:end]
-
-#         # Calculate survival probabilities for this batch
-#         # This now creates a (2000, 2000) matrix instead of (546k, 277k)
-#         # 4 million elements (32MB) vs 151 billion elements (1.1TB)
-#         exponents = -cum_hazards[:, np.newaxis] * rr_batch
-#         surv_at_jumps = np.exp(np.clip(exponents, -50, 0))
-
-#         # Area under curve
-#         batch_sum = np.sum(surv_at_jumps * time_deltas[:, np.newaxis], axis=0)
-
-#         # Tail Area
-#         s_max = surv_at_jumps[-1, :]
-#         tail_area = s_max / ((final_rate * rr_batch) + 1e-9)
-
-#         expected_times[start:end] = batch_sum + tail_area
-
-#     logger.debug(f"Log Margin stats: min={log_margin.min()}, max={log_margin.max()}, mean={log_margin.mean()}")
-#     logger.debug(f"Log Shift: {log_shift}")
-#     max_seconds = max_prediction_days * 24 * 3600
-#     return np.clip(expected_times, 0, max_seconds)
-
-# def get_expected_time_to_event(model, X_test, baseline_meta, max_prediction_days=365):
-#     """
-#     Calculates the time (seconds) until the cumulative probability of the event
-#     reaches 5% (risk_threshold = 0.05).
-#     """
-#     times = baseline_meta["times"]
-#     cum_hazards = baseline_meta["cum_hazards"]
-#     max_t = baseline_meta["max_time"]
-#     final_rate = baseline_meta["final_rate"]
-#     log_shift = baseline_meta["log_shift"]
-
-#     # Target Hazard H = -ln(1 - 0.05) ≈ 0.051
-#     # We want to know WHEN the user crosses this hazard line.
-#     target_hazard = -np.log(1.0 - 0.05)
-
-#     log_margin = model.predict(X_test, output_margin=True)
-#     relative_risk = np.exp(np.clip(log_margin - log_shift, -20, 20))
-
-#     # The baseline hazard required to hit the target, given this user's risk multiplier
-#     # H(t) * RR = target  ->  H(t) = target / RR
-#     required_baseline = target_hazard / (relative_risk + 1e-12)
-
-#     n_samples = len(required_baseline)
-#     predicted_times = np.zeros(n_samples)
-
-#     # Find the time t where baseline hazard >= required_baseline
-#     idx = np.searchsorted(cum_hazards, required_baseline)
-
-#     # 1. Threshold met within training data
-#     mask_within = idx < len(cum_hazards)
-#     if np.any(mask_within):
-#         predicted_times[mask_within] = times[idx[mask_within]]
-
-#     # 2. Threshold NOT met (Extrapolation)
-#     # H(t) = H_last + rate * (t - t_last)
-#     mask_outside = ~mask_within
-#     if np.any(mask_outside):
-#         req_h = required_baseline[mask_outside]
-#         last_h = cum_hazards[-1]
-#         safe_rate = final_rate if final_rate > 1e-12 else 1e-12
-
-#         extra_time = (req_h - last_h) / safe_rate
-#         predicted_times[mask_outside] = max_t + extra_time
-
-#     # Cap at 5 years to keep numbers sane (but allows differentiation well past 1 year)
-#     MAX_SECONDS = 5 * 365 * 24 * 3600
-#     return np.clip(predicted_times, 0, MAX_SECONDS)
-
 
 def get_expected_time_to_event(model, X_test, baseline_meta, max_prediction_days=365):
     """
@@ -953,11 +659,6 @@ def get_transaction_history_predictions(
 
             # Predict in batch and map predictions back to timestamps
             try:
-                # preds = model.predict(test_features)
-                # surv_probs = get_survival_probability(
-                #     model, test_features, baseline_meta, time_target=horizon_seconds
-                # )
-                # event_probabilities = 1.0 - surv_probs
                 time_preds = get_expected_time_to_event(
                     model, test_features, baseline_meta
                 )

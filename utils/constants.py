@@ -30,3 +30,5 @@ if os.path.exists("./Aave-Simulator/config.json"):
         PROFILES_DIR = json.load(f)["sample_user_profile_path"]
 PROFILE_CACHE_DIR = os.path.join(CACHE_DIR, "profile_backups")
 os.makedirs(PROFILE_CACHE_DIR, exist_ok=True)
+
+LABEL_TIME, LABEL_EVENT = "timeDiff", "status"
