@@ -1557,11 +1557,26 @@ def process_recommendation(item):
             }
         logger.debug("Checkpoint 12")
 
-        if (results_with_recommendation['final_state']["total_debt_usd"] == 0 and results_without_recommendation['liquidation_stats']["liquidated"]) or results_without_recommendation['liquidation_stats']["liquidation_reason"] == "dust_liquidation (total_debt_usd (0.000000) < $1.00)":
+        if results_with_recommendation['liquidation_stats']["liquidated"] and (results_with_recommendation['final_state']["total_debt_usd"] == 0 or results_with_recommendation['liquidation_stats']["liquidation_reason"] == "dust_liquidation (total_debt_usd (0.000000) < $1.00)"):
+            logger.info(
+                f"Liquidated despite 0 debt."
+            )
             return {
                 "success": False,
                 "error": f"Liquidated despite 0 debt.",
                 "stats_updates": {},
+            }
+        
+        if (results_without_recommendation['liquidation_stats']['liquidated']) and (results_without_recommendation['liquidation_stats']['time_to_liquidation'] < DEFAULT_TIME_DELTA_SECONDS) and (results_with_recommendation['liquidation_stats']["liquidated"]):
+            logger.info(
+                f"Skipping because liquidation too fast for user {user}. {results_without_recommendation['liquidation_stats']['time_to_liquidation'] < DEFAULT_TIME_DELTA_SECONDS} {results_without_recommendation['liquidation_stats']['liquidated']} {results_with_recommendation['liquidation_stats']["liquidated"]}"
+            )
+            return {
+                "success": False,
+                "error": f"Skipping because liquidation too fast for user {user}.",
+                "stats_updates": stats_updates,
+                "user": user,
+                "skipped": True,
             }
 
         # Update runtime stats with simulation results
