@@ -223,7 +223,7 @@ stats_no_dust = {
 }
 
 
-def load_results_cache(recommendation, suffix, get_results):
+def load_results_cache(recommendation, suffix, **passed_args):
     """Load cached simulation results or compute and cache them."""
     key = f"{recommendation['user']}_{int(recommendation.get('timestamp', 0))}_{suffix}"
     results_cache_file = Path(SIMULATION_RESULTS_CACHE_DIR) / f"{key}.pkl"
@@ -239,7 +239,7 @@ def load_results_cache(recommendation, suffix, get_results):
     # logger.debug("Checkpoint 7.7")
 
     # Cache miss - compute results
-    results = get_results()
+    results = run_simulation(**passed_args)
     # logger.debug("Checkpoint 7.8")
 
     # Save to cache (best effort)
@@ -1452,11 +1452,9 @@ def process_recommendation(item):
             results_without_recommendation = load_results_cache(
                 recommendation,
                 "without",
-                lambda: run_simulation(
-                    user_profile,
-                    lookahead_seconds=lookahead_seconds,
-                    output_file=outputFile,
-                ),
+                profile=user_profile,
+                lookahead_seconds=lookahead_seconds,
+                output_file=outputFile
             )
         except Exception as e:
             import traceback
@@ -1537,11 +1535,9 @@ def process_recommendation(item):
             results_with_recommendation = load_results_cache(
                 recommendation,
                 "with",
-                lambda: run_simulation(
-                    user_profile_with,
-                    lookahead_seconds=lookahead_seconds_for_recommendation,
-                    output_file=outputFile,
-                ),
+                profile=user_profile_with,
+                lookahead_seconds=lookahead_seconds_for_recommendation,
+                output_file=outputFile
             )
         except Exception as e:
             import traceback

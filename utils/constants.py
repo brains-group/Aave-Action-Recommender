@@ -1,6 +1,8 @@
 import os
 import json
 
+seed = 42
+
 DATA_PATH = "./data/"
 CACHE_DIR = "./cache/"
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -32,3 +34,5 @@ PROFILE_CACHE_DIR = os.path.join(CACHE_DIR, "profile_backups")
 os.makedirs(PROFILE_CACHE_DIR, exist_ok=True)
 
 LABEL_TIME, LABEL_EVENT = "timeDiff", "status"
+
+BEST_PARAMS_FILE = "./xgb_cox_refined_best_params.json"

@@ -1,10 +1,3 @@
-# %%
-# !export CUDA_VISIBLE_DEVICES=0
-
-# Install required packages
-# pip install -q pandas xgboost scikit-learn numpy pyreadr
-
-# Import libraries
 import pandas as pd
 import numpy as np
 import os
@@ -19,268 +12,12 @@ import pyreadr
 import json
 from utils.logger import logger
 from utils.data import get_event_df
+from utils.model_training import preprocess, get_model_for_pair_and_date
 
-# %%
 from utils.constants import *
 
-seed = 42
 np.random.seed(seed)
 
-
-# Module-level cache for loaded/trained models to reuse across calls
-MODELS_CACHE: dict = {}
-
-
-# Module-level cache for preprocessing artifacts (scaler, columns, categories)
-PREPROCESS_CACHE: dict = {}
-
-
-# %%
-def preprocess(
-    train_df_with_labels: Optional[pd.DataFrame] = None,
-    test_features_df: Optional[pd.DataFrame] = None,
-    model_date: Optional[int] = None,
-) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame]]:
-
-    # Create unique prefix for saving/loading preprocessing objects
-    unique_prefix = (
-        (
-            present_dataframe := (
-                train_df_with_labels
-                if train_df_with_labels is not None
-                else test_features_df
-            )
-        )["Index Event"].iloc[0]
-        + "_"
-        + present_dataframe["Outcome Event"].iloc[0]
-        + (f"_{model_date}_" if model_date is not None else "_")
-    )
-    # Define paths for saving/loading preprocessing objects
-    scaler_path = os.path.join(DATA_CACHE_DIR, unique_prefix + "scaler.pkl")
-    train_cols = os.path.join(DATA_CACHE_DIR, unique_prefix + "train_cols.pkl")
-    top_categories_dict_path = os.path.join(
-        DATA_CACHE_DIR, unique_prefix + "top_categories_dict.pkl"
-    )
-    categorical_cols_path = os.path.join(
-        DATA_CACHE_DIR, unique_prefix + "categorical_cols.pkl"
-    )
-    numerical_cols_path = os.path.join(
-        DATA_CACHE_DIR, unique_prefix + "numerical_cols.pkl"
-    )
-    cols_to_keep_path = os.path.join(DATA_CACHE_DIR, unique_prefix + "cols_to_keep.pkl")
-
-    target_columns = ["timeDiff", "status"]
-    cols_to_drop = [
-        "id",
-        "user",
-        "pool",
-        "Index Event",
-        "Outcome Event",
-        "type",
-        "timestamp",
-    ]
-
-    if train_df_with_labels is not None:
-        if model_date is not None:
-            # model_date may be a pandas.Timestamp while dataframe timestamps are numeric.
-            # Convert model_date to numeric epoch seconds for a safe comparison.
-            if isinstance(model_date, pd.Timestamp):
-                model_date_value = model_date.timestamp()
-            else:
-                try:
-                    model_date_value = float(model_date)
-                except Exception:
-                    model_date_value = model_date
-
-            train_df_with_labels = train_df_with_labels[
-                (train_df_with_labels["timestamp"] + train_df_with_labels["timeDiff"])
-                <= model_date_value
-            ]
-
-        # Separate features and targets (and drop unneeded columns from features)
-        train_targets = train_df_with_labels[target_columns]
-        train_features = train_df_with_labels.drop(
-            columns=target_columns + cols_to_drop, errors="ignore"
-        )
-
-        # Make uncommon categories "Other" and one-hot encode categorical features
-        categorical_cols = train_features.select_dtypes(
-            include=["object", "category"]
-        ).columns
-        top_categories_dict = {}
-        for col in categorical_cols:
-            top_categories_dict[col] = (
-                train_features[col].value_counts().nlargest(10).index
-            )
-            train_features[col] = train_features[col].where(
-                train_features[col].isin(top_categories_dict[col]), "Other"
-            )
-        train_features_encoded = pd.get_dummies(
-            train_features, columns=categorical_cols, dummy_na=True, drop_first=True
-        )
-
-        # Standardize numerical features
-        numerical_cols = train_features_encoded.select_dtypes(include=np.number).columns
-        scaler = StandardScaler()
-        train_features_scaled = scaler.fit_transform(
-            train_features_encoded[numerical_cols]
-        )
-        train_features_final = pd.DataFrame(
-            train_features_scaled,
-            index=train_features_encoded.index,
-            columns=numerical_cols,
-        ).fillna(0)
-
-        # Remove zero-variance columns
-        cols_to_keep = train_features_final.columns[train_features_final.var() != 0]
-        train_features_final = train_features_final[cols_to_keep]
-
-        # Save preprocessing objects
-        with open(scaler_path, "wb") as f:
-            pkl.dump(scaler, f)
-        with open(train_cols, "wb") as f:
-            pkl.dump(train_features_encoded.columns, f)
-        with open(top_categories_dict_path, "wb") as f:
-            pkl.dump(top_categories_dict, f)
-        with open(categorical_cols_path, "wb") as f:
-            pkl.dump(categorical_cols, f)
-        with open(numerical_cols_path, "wb") as f:
-            pkl.dump(numerical_cols, f)
-        with open(cols_to_keep_path, "wb") as f:
-            pkl.dump(cols_to_keep, f)
-
-        # Populate in-memory preprocess cache for fast reuse
-        PREPROCESS_CACHE[unique_prefix] = {
-            "scaler": scaler,
-            "train_cols": train_features_encoded.columns,
-            "top_categories_dict": top_categories_dict,
-            "categorical_cols": categorical_cols,
-            "numerical_cols": numerical_cols,
-            "cols_to_keep": cols_to_keep,
-        }
-    else:
-        train_features_final = None
-        train_targets = None
-
-    # Process test features if provided
-    if test_features_df is not None:
-        if unique_prefix not in PREPROCESS_CACHE:
-            PREPROCESS_CACHE[unique_prefix] = {}
-            with open(categorical_cols_path, "rb") as f:
-                PREPROCESS_CACHE[unique_prefix]["categorical_cols"] = pkl.load(f)
-            with open(top_categories_dict_path, "rb") as f:
-                PREPROCESS_CACHE[unique_prefix]["top_categories_dict"] = pkl.load(f)
-            with open(numerical_cols_path, "rb") as f:
-                PREPROCESS_CACHE[unique_prefix]["numerical_cols"] = pkl.load(f)
-            with open(cols_to_keep_path, "rb") as f:
-                PREPROCESS_CACHE[unique_prefix]["cols_to_keep"] = pkl.load(f)
-            with open(train_cols, "rb") as f:
-                PREPROCESS_CACHE[unique_prefix]["train_cols"] = pkl.load(f)
-            with open(scaler_path, "rb") as f:
-                PREPROCESS_CACHE[unique_prefix]["scaler"] = pkl.load(f)
-
-        test_features = test_features_df.drop(columns=cols_to_drop, errors="ignore")
-        categorical_cols = PREPROCESS_CACHE[unique_prefix]["categorical_cols"]
-        top_categories_dict = PREPROCESS_CACHE[unique_prefix]["top_categories_dict"]
-        for col in categorical_cols:
-            top_categories = top_categories_dict[col]
-            test_features[col] = test_features[col].where(
-                test_features[col].isin(top_categories), "Other"
-            )
-        test_features_encoded = pd.get_dummies(
-            test_features, columns=categorical_cols, dummy_na=True, drop_first=True
-        )
-        train_cols = PREPROCESS_CACHE[unique_prefix]["train_cols"]
-        test_features_aligned = test_features_encoded.reindex(
-            columns=train_cols, fill_value=0
-        )
-        scaler = PREPROCESS_CACHE[unique_prefix]["scaler"]
-        numerical_cols = PREPROCESS_CACHE[unique_prefix]["numerical_cols"]
-        test_features_scaled = scaler.transform(test_features_aligned[numerical_cols])
-        test_features_final = pd.DataFrame(
-            test_features_scaled,
-            index=test_features_aligned.index,
-            columns=numerical_cols,
-        ).fillna(0)
-        cols_to_keep = PREPROCESS_CACHE[unique_prefix]["cols_to_keep"]
-        # logger.debug("cols_to_keep:%s", cols_to_keep)
-        test_processed_features = test_features_final[cols_to_keep]
-    else:
-        test_processed_features = None
-    return train_features_final, train_targets, test_processed_features
-
-
-def compute_baseline_hazard(model, X_train, y_train):
-    """
-    Computes the Breslow estimator using Vectorized operations.
-    Replaces the O(N^2) loop with O(N) groupby/cumsum for massive speedup.
-    """
-    # 1. Get Log-Hazards and Shift
-    log_partial_hazard = model.predict(X_train, output_margin=True)
-    log_shift = np.median(log_partial_hazard)
-
-    # Center and Clip
-    log_partial_hazard_centered = np.clip(log_partial_hazard - log_shift, -10, 10)
-    partial_hazard = np.exp(log_partial_hazard_centered)
-
-    # 2. VECTORIZED BRESLOW ESTIMATOR
-    # Instead of iterating, we group by time.
-    # This collapses 500k rows into unique time buckets instantly.
-    df_temp = pd.DataFrame(
-        {
-            "time": y_train["timeDiff"].values,
-            "event": y_train["status"].values,
-            "risk": partial_hazard,
-        }
-    )
-
-    # Group by unique durations
-    # sum('risk') = hazard of all people leaving at this time t
-    # sum('event') = actual deaths at this time t
-    grouped = df_temp.groupby("time").agg({"event": "sum", "risk": "sum"}).sort_index()
-
-    unique_durations = grouped.index.values
-    events_at_t = grouped["event"].values
-    risk_leaving_at_t = grouped["risk"].values
-
-    # STABILITY FIX: Use Reverse Cumulative Sum for Risk Set
-    # risk_at_t[i] = Sum of all risk leaving from time i to end
-    # This avoids "Total - Cumulative" subtraction errors.
-    risk_at_t = np.cumsum(risk_leaving_at_t[::-1])[::-1]
-
-    # Handle near-zero risk to avoid division errors
-    risk_at_t = np.maximum(risk_at_t, 1e-9)
-
-    # Calculate Baseline Increment (d_i / Sum_Risk_i)
-    hazard_increments = events_at_t / risk_at_t
-    cum_baseline_hazard = np.cumsum(hazard_increments)
-
-    # 3. Memory Optimization (Downsampling)
-    MAX_POINTS = 2000
-    if len(unique_durations) > MAX_POINTS:
-        indices = np.linspace(0, len(unique_durations) - 1, MAX_POINTS).astype(int)
-        unique_durations = unique_durations[indices]
-        cum_baseline_hazard = cum_baseline_hazard[indices]
-
-    # 4. Extrapolation Logic
-    if len(unique_durations) > 5:
-        tail_idx = int(len(unique_durations) * 0.8)
-        time_delta = unique_durations[-1] - unique_durations[tail_idx]
-        hazard_delta = cum_baseline_hazard[-1] - cum_baseline_hazard[tail_idx]
-        final_rate = hazard_delta / (time_delta + 1e-9)
-    else:
-        final_rate = 0.0
-
-    logger.debug(f"Baseline max hazard: {cum_baseline_hazard[-1]}")
-    logger.debug(f"Total events: {np.sum(events_at_t)}")
-
-    return {
-        "times": unique_durations,
-        "cum_hazards": cum_baseline_hazard,
-        "final_rate": final_rate,
-        "max_time": unique_durations[-1],
-        "log_shift": log_shift,
-    }
 
 def get_expected_time_to_event(model, X_test, baseline_meta, max_prediction_days=365):
     """
@@ -326,122 +63,6 @@ def get_expected_time_to_event(model, X_test, baseline_meta, max_prediction_days
     return window_seconds / probability
 
 
-# %%
-def get_model_for_pair_and_date(
-    index_event: str,
-    outcome_event: str,
-    model_date: int | None = None,
-    verbose: bool = False,
-):
-    # Try module-level cache first
-    model_key = (index_event, outcome_event, str(model_date))
-    if model_key in MODELS_CACHE:
-        return MODELS_CACHE[model_key]
-    # normalize model_date for filename
-    model_date_str = (
-        str(model_date).replace(" ", "_") if model_date is not None else "latest"
-    )
-    model_filename = f"xgboost_cox_{index_event}_{outcome_event}_{model_date_str}.ubj"
-    model_path = os.path.join(MODEL_CACHE_DIR, model_filename)
-    baseline_path = model_path.replace(".ubj", "_baseline.pkl")
-
-    # Create model with Cox objective
-    model = XGBRegressor(
-        objective="survival:cox",
-        eval_metric="cox-nloglik",
-        tree_method="hist",
-        predictor="gpu_predictor",
-        device="cuda",
-        seed=42,
-        verbosity=0,
-        max_bin=64,
-        learning_rate=0.05,
-        max_depth=6,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        min_child_weight=5,
-        reg_lambda=1.0,
-        reg_alpha=0.1,
-    )
-
-    # If model file exists, try to load into the estimator and return the estimator
-    needToTrainAndSaveModel = True
-    if os.path.exists(model_path):
-        if verbose:
-            logger.info(f"Loading existing model from {model_path}")
-        try:
-            model.load_model(model_path)
-            if verbose:
-                logger.info(f"model loaded from {model_path}")
-        except Exception as e:
-            logger.warning(
-                f"Warning: failed to load model from {model_path}: {e}. Will retrain."
-            )
-        else:
-            if os.path.exists(baseline_path):
-                with open(baseline_path, "rb") as f:
-                    baseline_data = pkl.load(f)
-                MODELS_CACHE[model_key] = (model, baseline_data)
-                return model, baseline_data
-            else:
-                needToTrainAndSaveModel = False
-
-    dataset_path = os.path.join(index_event, outcome_event)
-
-    # --- Load and Preprocess ---
-    if verbose:
-        logger.info(
-            f"Loading data from {os.path.join(DATA_PATH, dataset_path, 'data.csv')}"
-        )
-    train_df = get_event_df(index_event, outcome_event)
-    if train_df is None:
-        logger.warning(f"No training data found for {dataset_path}")
-        MODELS_CACHE[model_key] = None
-        return None
-
-    X_train, y_train, _ = preprocess(train_df, model_date=model_date)
-
-    # --- Train Model ---
-    # Prepare target variables for Cox regression
-    y_train_duration = y_train["timeDiff"].values
-    y_train_event = y_train["status"].values
-
-    if needToTrainAndSaveModel:
-        # Fit model: XGBoost Cox expects labels to be the event indicators
-        # and the sample_weight to be the durations
-        if verbose:
-            logger.info("Training model...")
-        try:
-            model.fit(X_train, y_train_event, sample_weight=y_train_duration)
-        except Exception as e:
-            logger.error(f"ERROR: Model training failed for {dataset_path}: {e}")
-            raise
-
-        # Save model: try estimator's save_model, fall back to Booster.save_model
-        try:
-            # XGBRegressor implements save_model; call it and confirm file created
-            model.save_model(model_path)
-            if verbose:
-                logger.info(f"Model saved to {model_path}")
-        except Exception:
-            try:
-                booster = model.get_booster()
-                booster.save_model(model_path)
-                if verbose:
-                    logger.info(f"Model booster saved to {model_path}")
-            except Exception as e:
-                logger.warning(f"Warning: Failed to save model to {model_path}: {e}")
-
-    baseline_data = compute_baseline_hazard(model, X_train, y_train)
-    with open(baseline_path, "wb") as f:
-        pkl.dump(baseline_data, f)
-
-    # cache model (even if training produced a fitted estimator)
-    MODELS_CACHE[model_key] = (model, baseline_data)
-    return model, baseline_data
-
-
-# %%
 def train_models_for_all_event_pairs(
     model_date: int | None = None, verbose: bool = False
 ):
@@ -476,8 +97,6 @@ def train_models_for_all_event_pairs(
         logger.info("\n\nAll prediction files have been generated.")
 
 
-# %%
-
 DATE_RANGES_CACHE = None
 
 
@@ -505,12 +124,6 @@ def get_date_ranges():
     return train_dates, test_dates
 
 
-# %%
-# for date in chain(*get_date_ranges()):
-#     train_models_for_all_event_pairs(model_date=date.timestamp(), verbose=True)
-
-
-# %%
 def get_user_history(user_id: str, up_to_timestamp: int) -> pd.DataFrame:
     all_events = []
     for index_event in EVENTS:
@@ -652,7 +265,7 @@ def get_transaction_history_predictions(
                 test_features_df=test_df, model_date=model_date
             )
 
-            if test_features is None or test_features.shape[0] == 0:
+            if test_features is None or test_features.num_row() == 0:
                 for ts in group["timestamp"]:
                     results[int(ts)][outcome_event] = None
                 continue
@@ -685,7 +298,6 @@ def get_transaction_history_predictions(
     return results
 
 
-# %%
 def calculate_trend_slope(data):
     """
     Calculates the linear regression slope of a dataset to determine the trend.
@@ -1062,67 +674,6 @@ def optimize_recommendation(row: pd.Series, recommended_action: str):
         recommended_action,
         amount=initial_amount,
     )
-    # # Debug: compute single-action prediction before any adjustments
-    # try:
-    #     train_dates, test_dates = get_date_ranges()
-    #     dates = train_dates.union(test_dates)
-    #     model_date = dates[
-    #         dates <= pd.to_datetime(new_action["timestamp"], unit="s")
-    #     ].max()
-    #     index_event_title = str(new_action["Index Event"]).title()
-    #     # load model for Liquidated outcome only and predict for this single row
-    #     logger.debug(
-    #         "Model parameters for function: %s, %s, %s",
-    #         index_event_title,
-    #         "Liquidated",
-    #         model_date,
-    #     )
-    #     model = get_model_for_pair_and_date(
-    #         index_event_title, "Liquidated", model_date=model_date, verbose=True
-    #     )
-    #     new_action_copy = new_action.copy()
-    #     new_action_copy["Outcome Event"] = "liquidated"
-    #     _, _, test_features = preprocess(
-    #         test_features_df=new_action_copy.to_frame().T, model_date=model_date
-    #     )
-    #     if (
-    #         model is not None
-    #         and test_features is not None
-    #         and test_features.shape[0] > 0
-    #     ):
-    #         try:
-    #             single_pred = float(model.predict(test_features)[0])
-    #             logger.info(
-    #                 "DEBUG: single-action initial pred %s->Liquidated amount=%s (%s in final features): %s",
-    #                 index_event_title,
-    #                 new_action["amount"],
-    #                 test_features["amount"],
-    #                 single_pred,
-    #             )
-    #         except Exception as e:
-    #             logger.exception("DEBUG: failed to run single-action predict: %s", e)
-    #         else:
-    #             # Verify whether 'amount' features actually influence predictions
-    #             try:
-    #                 ver = verify_amount_feature_effect(
-    #                     model,
-    #                     test_features,
-    #                     index_event=index_event_title,
-    #                     outcome_event="Liquidated",
-    #                     model_date=model_date,
-    #                     substrings=["marketWithdrawCount"],
-    #                 )
-    #                 logger.info("DEBUG: amount-influence check: %s", ver)
-    #             except Exception:
-    #                 logger.exception("DEBUG: amount-influence verification failed")
-    #     else:
-    #         logger.info(
-    #             "DEBUG: single-action pred unavailable; model=%s, features=%s",
-    #             model is not None,
-    #             None if test_features is None else test_features.shape,
-    #         )
-    # except Exception:
-    #     logger.exception("DEBUG: error preparing single-action prediction")
 
     # If risk remains, iteratively increase the amount and log single-action predictions
     max_iterations = 15  # Prevent infinite loops
@@ -1163,71 +714,6 @@ def optimize_recommendation(row: pd.Series, recommended_action: str):
             new_action["amount"],
             recommended_action,
         )
-        # Still return the action, but log a warning
-        # The caller can decide whether to filter it out
-
-        # # Debug: recompute single-action prediction after increasing amount
-        # try:
-        #     train_dates, test_dates = get_date_ranges()
-        #     dates = train_dates.union(test_dates)
-        #     model_date = dates[
-        #         dates <= pd.to_datetime(new_action["timestamp"], unit="s")
-        #     ].max()
-        #     index_event_title = str(new_action["Index Event"]).title()
-        #     model = get_model_for_pair_and_date(
-        #         index_event_title, "Liquidated", model_date=model_date, verbose=True
-        #     )
-        #     new_action_copy = new_action.copy()
-        #     new_action_copy["Outcome Event"] = "liquidated"
-        #     _, _, test_features = preprocess(
-        #         test_features_df=new_action_copy.to_frame().T, model_date=model_date
-        #     )
-        #     if (
-        #         model is not None
-        #         and test_features is not None
-        #         and test_features.shape[0] > 0
-        #     ):
-        #         try:
-        #             single_pred = float(model.predict(test_features)[0])
-        #             logger.info(
-        #                 "DEBUG: single-action initial pred %s->Liquidated amount=%s (%s in final features): %s",
-        #                 index_event_title,
-        #                 new_action["amount"],
-        #                 test_features["amount"],
-        #                 single_pred,
-        #             )
-        #         except Exception as e:
-        #             logger.exception(
-        #                 "DEBUG: failed to run single-action predict after increase: %s",
-        #                 e,
-        #             )
-        #         else:
-        #             try:
-        #                 ver = verify_amount_feature_effect(
-        #                     model,
-        #                     test_features,
-        #                     index_event=index_event_title,
-        #                     outcome_event="Liquidated",
-        #                     model_date=model_date,
-        #                     substrings=["marketwithdrawcount"],
-        #                 )
-        #                 logger.info(
-        #                     "DEBUG: amount-influence check after increase: %s", ver
-        #                 )
-        #             except Exception:
-        #                 logger.exception(
-        #                     "DEBUG: amount-influence verification failed after increase"
-        #                 )
-        #     else:
-        #         logger.info(
-        #             "DEBUG: single-action pred unavailable after increase; model=%s, features=%s",
-        #             model is not None,
-        #             None if test_features is None else test_features.shape,
-        #         )
-        # except Exception:
-        #     logger.exception(
-        #         "DEBUG: error preparing single-action prediction after increase"
-        #     )
     return new_action
 
 
@@ -1291,181 +777,6 @@ def recommend_action(row: pd.Series):
     }
 
 
-# def verify_amount_feature_effect(
-#     model,
-#     test_features,
-#     substrings=None,
-#     index_event=None,
-#     outcome_event=None,
-#     model_date=None,
-# ):
-#     """Check whether features containing substrings (default 'amount')
-#     appear in the model and whether ablating them changes predictions.
-
-#     Returns a small dict with columns considered, their importances, and
-#     baseline vs ablated prediction difference.
-#     """
-#     # if substrings is None:
-#     #     substrings = ["amount"]
-#     res = {
-#         "found_features": [],
-#         "importances": {},
-#         "baseline_pred": None,
-#         "ablated_pred": None,
-#         "diff": None,
-#     }
-#     if test_features is None or test_features.shape[0] == 0:
-#         return {**res, "error": "no test features"}
-
-#     # locate candidate columns in test_features
-#     if substrings is None:
-#         cols = test_features.columns
-#     else:
-#         cols = [
-#             c for c in test_features.columns if any(s in c.lower() for s in substrings)
-#         ]
-#     res["found_features"] = cols
-
-#     # capture baseline prediction and feature values
-#     try:
-#         baseline = float(model.predict(test_features)[0])
-#         res["baseline_pred"] = baseline
-#         # record the original numeric values for the candidate cols
-#         res["original_values"] = {
-#             c: float(test_features.iloc[0][c])
-#             for c in cols
-#             if c in test_features.columns
-#         }
-#     except Exception as e:
-#         res["error"] = f"baseline prediction failed: {e}"
-#         return res
-
-#     # gather booster info (feature names and raw importances)
-#     try:
-#         booster = model.get_booster()
-#         booster_feat_names = getattr(booster, "feature_names", None)
-#         gains = booster.get_score(importance_type="gain")
-#         res["booster_feature_names"] = booster_feat_names
-#         res["raw_importances_keys"] = list(gains.keys())
-#         # map candidate cols to any matching gain key, fall back to 0
-#         for c in cols:
-#             res["importances"][c] = gains.get(
-#                 c,
-#                 gains.get(
-#                     c.replace(".", "_"),
-#                     gains.get(f"f{list(test_features.columns).index(c)}", 0),
-#                 ),
-#             )
-#         res["importances"] = sorted(
-#             res["importances"].items(), key=lambda x: x[1], reverse=True
-#         )
-#     except Exception:
-#         res["importances"] = {c: None for c in cols}
-
-#     # If we can, load scaler and train_cols for the model's preprocessing
-#     try:
-#         if index_event is not None and outcome_event is not None:
-#             unique_prefix = (
-#                 str(index_event)
-#                 + "_"
-#                 + str(outcome_event)
-#                 + (f"_{model_date}_" if model_date is not None else "_")
-#             )
-#             scaler_path = os.path.join(DATA_CACHE_DIR, unique_prefix + "scaler.pkl")
-#             train_cols_path = os.path.join(
-#                 DATA_CACHE_DIR, unique_prefix + "train_cols.pkl"
-#             )
-#             if os.path.exists(scaler_path):
-#                 with open(scaler_path, "rb") as f:
-#                     scaler_obj = pkl.load(f)
-#                 # scaler may be StandardScaler; try to get mean_ and scale_
-#                 means = getattr(scaler_obj, "mean_", None)
-#                 scales = getattr(scaler_obj, "scale_", None)
-#                 # map scaler stats to train_cols if available
-#                 if os.path.exists(train_cols_path):
-#                     with open(train_cols_path, "rb") as f:
-#                         train_cols_list = list(pkl.load(f))
-#                     if (
-#                         means is not None
-#                         and scales is not None
-#                         and len(means) == len(train_cols_list)
-#                     ):
-#                         scaler_info = {
-#                             col: {"mean": float(means[i]), "scale": float(scales[i])}
-#                             for i, col in enumerate(train_cols_list)
-#                         }
-#                         res["scaler_info_sample"] = {
-#                             c: scaler_info.get(c) for c in cols
-#                         }
-#             # feature name mapping check
-#             try:
-#                 booster = model.get_booster()
-#                 bnames = getattr(booster, "feature_names", None)
-#                 if bnames is not None:
-#                     # map bnames to test_features.columns by equality and by index
-#                     mapping = {}
-#                     for i, bn in enumerate(bnames):
-#                         mapping[bn] = (
-#                             test_features.columns[i]
-#                             if i < len(test_features.columns)
-#                             else None
-#                         )
-#                     res["booster_to_df_col_mapping_sample"] = {
-#                         k: mapping.get(k)
-#                         for k in mapping
-#                         if any(s in k.lower() for s in (substrings or ["amount"]))
-#                     }
-#             except Exception:
-#                 pass
-#     except Exception:
-#         # non-fatal; continue
-#         pass
-
-#     # Ablation test: set candidate cols to 0 (scaled mean), and to large offset and small perturbation
-#     tests = {}
-#     try:
-#         # zeroed (mean)
-#         ablated = test_features.copy()
-#         for c in cols:
-#             if c in ablated.columns:
-#                 ablated[c] = 0.0
-#         tests["zeroed"] = float(model.predict(ablated)[0])
-
-#         # large offset: set to a large positive value (3x std of column if available)
-#         large = test_features.copy()
-#         for c in cols:
-#             if c in large.columns:
-#                 col_std = (
-#                     float(test_features[c].std(ddof=0))
-#                     if test_features[c].std(ddof=0) != 0
-#                     else 1.0
-#                 )
-#                 large[c] = float(test_features.iloc[0][c]) + 3.0 * col_std
-#         tests["large_offset"] = float(model.predict(large)[0])
-
-#         # small epsilon perturbation
-#         small = test_features.copy()
-#         for c in cols:
-#             if c in small.columns:
-#                 col_std = (
-#                     float(test_features[c].std(ddof=0))
-#                     if test_features[c].std(ddof=0) != 0
-#                     else 1.0
-#                 )
-#                 small[c] = float(test_features.iloc[0][c]) + 1e-3 * col_std
-#         tests["small_perturb"] = float(model.predict(small)[0])
-
-#         res["test_preds"] = tests
-#         res["diff_zeroed"] = tests["zeroed"] - res["baseline_pred"]
-#         res["diff_large_offset"] = tests["large_offset"] - res["baseline_pred"]
-#         res["diff_small_perturb"] = tests["small_perturb"] - res["baseline_pred"]
-#     except Exception as e:
-#         res["error"] = f"sensitivity tests failed: {e}"
-
-#     return res
-
-
-# %%
 def get_train_set():
     train_set_dir = os.path.join(CACHE_DIR, "train_set.csv")
     if os.path.exists(train_set_dir):
@@ -1508,7 +819,9 @@ def get_train_set():
             if index_event == "Liquidated":
                 continue
             outcome_event = "Liquidated"
-            logger.info("Building train_set: processing %s->%s", index_event, outcome_event)
+            logger.info(
+                "Building train_set: processing %s->%s", index_event, outcome_event
+            )
             df = get_event_df(index_event, outcome_event)
             if df is None:
                 continue
