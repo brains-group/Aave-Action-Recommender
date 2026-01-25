@@ -158,11 +158,11 @@ def get_user_history(user_id: str, up_to_timestamp: int) -> pd.DataFrame:
 
 
 def get_transaction_history_predictions(
-    row: pd.Series, horizon_seconds=7 * 24 * 60 * 60
+    row: pd.Series
 ) -> pd.DataFrame:
     results_cache_file = os.path.join(
         RESULTS_CACHE_DIR,
-        f"{row['user']}_{row['timestamp']}_{row['amount']}_{horizon_seconds}.pkl",
+        f"{row['user']}_{row['timestamp']}_{row['amount']}.pkl",
     )
     # If exact cache exists for this amount, return it immediately
     if os.path.exists(results_cache_file):
@@ -261,8 +261,8 @@ def get_transaction_history_predictions(
             test_df["Outcome Event"] = outcome_event.lower()
 
             # Preprocess the entire group's test features at once
-            _, _, test_features = preprocess(
-                test_features_df=test_df, model_date=model_date
+            _, _, test_features, test_features_index = preprocess(
+                test_df=test_df, model_date=model_date
             )
 
             if test_features is None or test_features.num_row() == 0:
@@ -285,8 +285,8 @@ def get_transaction_history_predictions(
                     results[int(ts)][outcome_event] = None
                 continue
 
-            # Align by index: test_features.index corresponds to rows in user_history
-            for idx_i, time_pred in zip(test_features.index, time_preds):
+            # Align by index: test_features_index corresponds to rows in user_history
+            for idx_i, time_pred in zip(test_features_index, time_preds):
                 ts = int(user_history.loc[idx_i, "timestamp"])
                 results[ts][outcome_event] = float(time_pred)
 

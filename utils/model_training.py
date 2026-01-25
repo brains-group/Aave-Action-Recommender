@@ -173,14 +173,16 @@ def preprocess(
             index=test_features.index,
         ).astype(np.float32)
 
+        test_features_final_index = test_features_final.index
         test_features_final = xgb.DMatrix(test_features_final)
     else:
-        test_features_final = None
+        test_features_final = test_features_final_index = None
 
     return (
         train_features_final,
         train_targets,
         test_features_final,
+        test_features_final_index,
     )
 
 
@@ -307,7 +309,7 @@ def get_model_for_pair_and_date(
         MODELS_CACHE[model_key] = None
         return None
 
-    X_train, y_train, _ = preprocess(train_df, model_date=model_date)
+    X_train, y_train, _, _ = preprocess(train_df, model_date=model_date)
 
     if needToTrainAndSaveModel:
         # Fit model: XGBoost Cox expects labels to be the event indicators
