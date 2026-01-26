@@ -1,15 +1,9 @@
 import pandas as pd
 import numpy as np
 import os
-import shutil
-from xgboost import XGBRegressor
-from sklearn.preprocessing import StandardScaler
-from typing import Tuple, Optional
 import pickle as pkl
-from itertools import chain
 import glob
 import pyreadr
-import json
 from utils.logger import logger
 from utils.data import get_event_df
 from utils.model_training import preprocess, get_model_for_pair_and_date
@@ -63,42 +57,7 @@ def get_expected_time_to_event(model, X_test, baseline_meta, max_prediction_days
     return window_seconds / probability
 
 
-def train_models_for_all_event_pairs(
-    model_date: int | None = None, verbose: bool = False
-):
-    # Define all 16 event pairs
-    index_events = EVENTS
-    outcome_events = index_events
-    event_pairs = [
-        event_pair
-        for sub_event_pairs in [
-            [(index_event, outcome_event) for outcome_event in outcome_events]
-            for index_event in index_events
-        ]
-        for event_pair in sub_event_pairs
-    ]
-
-    total_pairs = len(event_pairs)
-    for pair_idx, (index_event, outcome_event) in enumerate(event_pairs, start=1):
-        if index_event == outcome_event and index_event == "Liquidated":
-            continue
-        if verbose:
-            logger.info("\n" + "=" * 50)
-            logger.info(
-                f"Training event pair {pair_idx}/{total_pairs}: {index_event} -> {outcome_event}"
-            )
-            logger.info("" + "=" * 50)
-
-        get_model_for_pair_and_date(
-            index_event, outcome_event, model_date=model_date, verbose=verbose
-        )
-
-    if verbose:
-        logger.info("\n\nAll prediction files have been generated.")
-
-
 DATE_RANGES_CACHE = None
-
 
 def get_date_ranges():
     global DATE_RANGES_CACHE
@@ -156,6 +115,72 @@ def get_user_history(user_id: str, up_to_timestamp: int) -> pd.DataFrame:
         user_history_df = user_history_df.tail(10000).reset_index(drop=True)
     return user_history_df
 
+def calc_predictions(index_event_value, group, results, model_date, user_history):
+    # use title-case when requesting model (keeps previous behavior)
+    index_event_title = str(index_event_value).title()
+
+    # For each possible outcome, preprocess the whole group once and predict
+    total_outcomes = len(EVENTS)
+    for outcome_idx, outcome_event in enumerate(EVENTS, start=1):
+        logger.debug(
+            "%s -> outcome %s/%s: %s",
+            index_event_title,
+            outcome_idx,
+            total_outcomes,
+            outcome_event,
+        )
+        # Skip invalid liquidated->liquidated pairs (preserve previous behavior)
+        if index_event_title == outcome_event and index_event_title == "Liquidated":
+            for ts in group["timestamp"]:
+                results[int(ts)][outcome_event] = None
+            continue
+
+        model_pack = get_model_for_pair_and_date(
+            index_event_title,
+            outcome_event,
+            model_date=model_date,
+            verbose=True,
+        )
+        if model_pack is None:
+            for ts in group["timestamp"]:
+                results[int(ts)][outcome_event] = None
+            continue
+        model, baseline_meta = model_pack
+
+        # Prepare a copy of the group's rows with the requested Outcome Event
+        test_df = group.copy()
+        test_df["Outcome Event"] = outcome_event.lower()
+
+        # Preprocess the entire group's test features at once
+        _, _, test_features, test_features_index = preprocess(
+            test_df=test_df, model_date=model_date
+        )
+
+        if test_features is None or test_features.num_row() == 0:
+            for ts in group["timestamp"]:
+                results[int(ts)][outcome_event] = None
+            continue
+
+        # Predict in batch and map predictions back to timestamps
+        try:
+            time_preds = get_expected_time_to_event(
+                model, test_features, baseline_meta
+            )
+        except Exception:
+            # If prediction fails for any reason, mark as None
+            logger.warning(
+                f"Warning: prediction failed for {index_event_title}->{outcome_event} at {model_date}"
+            )
+            logger.exception("Exception details:")
+            for ts in group["timestamp"]:
+                results[int(ts)][outcome_event] = None
+            continue
+
+        # Align by index: test_features_index corresponds to rows in user_history
+        for idx_i, time_pred in zip(test_features_index, time_preds):
+            ts = int(user_history.loc[idx_i, "timestamp"])
+            results[ts][outcome_event] = float(time_pred)
+
 
 def get_transaction_history_predictions(
     row: pd.Series
@@ -182,113 +207,47 @@ def get_transaction_history_predictions(
                 with open(m, "rb") as f:
                     cached_results = pkl.load(f)
                 logger.debug("Loaded alternative cache %s for user/timestamp", m)
-                break
             except Exception:
                 continue
+            else:
+                
+                break
+
 
     # Build cache-aware, batched prediction: group history rows by Index Event
     # If we loaded an alternative cache file above, start from that and only
     # recompute the predictions for the most recent transaction (the row).
-    results = cached_results if cached_results is not None else {}
     train_dates, test_dates = get_date_ranges()
     dates = train_dates.union(test_dates)
 
     user_history = get_user_history(
         user_id=row["user"], up_to_timestamp=row["timestamp"] - 1
     )
-    user_history = pd.concat([user_history, row.to_frame().T]).reset_index(drop=True)
+    row_df = row.to_frame().T
+    user_history = pd.concat([user_history, row_df]).reset_index(drop=True)
 
     model_date = dates[dates <= pd.to_datetime(row["timestamp"], unit="s")].max()
 
-    # initialize results structure for each timestamp (preserve existing cached keys)
-    for ts in user_history["timestamp"]:
-        results.setdefault(int(ts), {})
+    if cached_results is not None:
+        results = cached_results
+        calc_predictions(row["Index Event"], row_df, results, model_date, user_history)
+    else:
+        # initialize results structure for each timestamp (preserve existing cached keys)
+        results = {}
+        for ts in user_history["timestamp"]:
+            results.setdefault(int(ts), {})
 
-    # Group by original Index Event to preprocess/predict in batches
-    grouped = list(user_history.groupby("Index Event"))
-    total_groups = len(grouped)
-    for group_idx, (index_event_value, group) in enumerate(grouped, start=1):
-        logger.debug(
-            "Processing IndexEvent group %s/%s: %s",
-            group_idx,
-            total_groups,
-            index_event_value,
-        )
-        # use title-case when requesting model (keeps previous behavior)
-        index_event_title = str(index_event_value).title()
-
-        # # If we loaded an alternative cache, only recompute groups that
-        # # contain the most-recent transaction (row). This avoids redoing work
-        # # for unchanged historical rows.
-        # if cached_results is not None:
-        #     if row["timestamp"] not in group["timestamp"].values:
-        #         logger.debug(
-        #             "Skipping group %s because it does not contain the latest row",
-        #             index_event_value,
-        #         )
-        #         continue
-
-        # For each possible outcome, preprocess the whole group once and predict
-        total_outcomes = len(EVENTS)
-        for outcome_idx, outcome_event in enumerate(EVENTS, start=1):
+        # Group by original Index Event to preprocess/predict in batches
+        grouped = list(user_history.groupby("Index Event"))
+        total_groups = len(grouped)
+        for group_idx, (index_event_value, group) in enumerate(grouped, start=1):
             logger.debug(
-                "%s -> outcome %s/%s: %s",
-                index_event_title,
-                outcome_idx,
-                total_outcomes,
-                outcome_event,
+                "Processing IndexEvent group %s/%s: %s",
+                group_idx,
+                total_groups,
+                index_event_value,
             )
-            # Skip invalid liquidated->liquidated pairs (preserve previous behavior)
-            if index_event_title == outcome_event and index_event_title == "Liquidated":
-                for ts in group["timestamp"]:
-                    results[int(ts)][outcome_event] = None
-                continue
-
-            model_pack = get_model_for_pair_and_date(
-                index_event_title,
-                outcome_event,
-                model_date=model_date,
-                verbose=True,
-            )
-            if model_pack is None:
-                for ts in group["timestamp"]:
-                    results[int(ts)][outcome_event] = None
-                continue
-            model, baseline_meta = model_pack
-
-            # Prepare a copy of the group's rows with the requested Outcome Event
-            test_df = group.copy()
-            test_df["Outcome Event"] = outcome_event.lower()
-
-            # Preprocess the entire group's test features at once
-            _, _, test_features, test_features_index = preprocess(
-                test_df=test_df, model_date=model_date
-            )
-
-            if test_features is None or test_features.num_row() == 0:
-                for ts in group["timestamp"]:
-                    results[int(ts)][outcome_event] = None
-                continue
-
-            # Predict in batch and map predictions back to timestamps
-            try:
-                time_preds = get_expected_time_to_event(
-                    model, test_features, baseline_meta
-                )
-            except Exception:
-                # If prediction fails for any reason, mark as None
-                logger.warning(
-                    f"Warning: prediction failed for {index_event_title}->{outcome_event} at {model_date}"
-                )
-                logger.exception("Exception details:")
-                for ts in group["timestamp"]:
-                    results[int(ts)][outcome_event] = None
-                continue
-
-            # Align by index: test_features_index corresponds to rows in user_history
-            for idx_i, time_pred in zip(test_features_index, time_preds):
-                ts = int(user_history.loc[idx_i, "timestamp"])
-                results[ts][outcome_event] = float(time_pred)
+            calc_predictions(index_event_value, group, results, model_date, user_history)
 
     with open(
         results_cache_file,
@@ -664,7 +623,7 @@ def optimize_recommendation(row: pd.Series, recommended_action: str):
     from utils.constants import MIN_RECOMMENDATION_AMOUNT
 
     # Start with minimum amount instead of fixed 10
-    price = row.get("priceInUSD", 1.0) if pd.notna(row.get("priceInUSD")) else 1.0
+    price = max(row.get("priceInUSD", 1.0) if pd.notna(row.get("priceInUSD")) else 1.0, 0.0001)
     initial_amount = max(
         MIN_RECOMMENDATION_AMOUNT / price, 10.0
     )  # At least MIN_RECOMMENDATION_AMOUNT USD or 10 tokens
@@ -778,9 +737,9 @@ def recommend_action(row: pd.Series):
 
 
 def get_train_set():
-    train_set_dir = os.path.join(CACHE_DIR, "train_set.csv")
-    if os.path.exists(train_set_dir):
-        train_set = pd.read_csv(train_set_dir)
+    TRAIN_SET_CACHE_PATH = os.path.join(CACHE_DIR, "train_set.csv")
+    if os.path.exists(TRAIN_SET_CACHE_PATH):
+        train_set = pd.read_csv(TRAIN_SET_CACHE_PATH)
     else:
         train_set = pd.DataFrame()
         train_ranges, test_ranges = get_date_ranges()
@@ -842,7 +801,7 @@ def get_train_set():
                 ],
                 ignore_index=True,
             )
-        with open(train_set_dir, "w") as f:
+        with open(TRAIN_SET_CACHE_PATH, "w") as f:
             train_set.to_csv(f, index=False)
 
     return train_set

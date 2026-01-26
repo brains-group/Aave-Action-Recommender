@@ -1,9 +1,10 @@
 import logging
 
+outputFile = "output.log"
 # Module logger
 logger = logging.getLogger(__name__)
 # File handler: capture all log levels to file
-_file_handler = logging.FileHandler("output19.log")
+_file_handler = logging.FileHandler(outputFile)
 _file_handler.setLevel(logging.DEBUG)
 _file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
 logger.addHandler(_file_handler)
@@ -14,6 +15,7 @@ logger.addHandler(_file_handler)
 # logger.addHandler(_console_handler)
 # Ensure logger forwards all levels to handlers (file will receive DEBUG+)
 logger.setLevel(logging.DEBUG)
+logger.propagate = False
 
 
 def set_log_file(path: str, file_level: str | int = "DEBUG"):

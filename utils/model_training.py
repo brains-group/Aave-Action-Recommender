@@ -15,10 +15,10 @@ from utils.constants import (
     LABEL_TIME,
     LABEL_EVENT,
     DATA_CACHE_DIR,
-    BEST_PARAMS_FILE,
     MODEL_CACHE_DIR,
     DATA_PATH,
     seed,
+    EVENTS,
 )
 
 PREPROCESS_CACHE: Dict[str, Any] = {}
@@ -351,3 +351,36 @@ def get_model_for_pair_and_date(
     # cache model (even if training produced a fitted estimator)
     MODELS_CACHE[model_key] = (model, baseline_data)
     return model, baseline_data
+
+def train_models_for_all_event_pairs(
+    model_date: int | None = None, verbose: bool = False
+):
+    # Define all 16 event pairs
+    index_events = EVENTS
+    outcome_events = index_events
+    event_pairs = [
+        event_pair
+        for sub_event_pairs in [
+            [(index_event, outcome_event) for outcome_event in outcome_events]
+            for index_event in index_events
+        ]
+        for event_pair in sub_event_pairs
+    ]
+
+    total_pairs = len(event_pairs)
+    for pair_idx, (index_event, outcome_event) in enumerate(event_pairs, start=1):
+        if index_event == outcome_event and index_event == "Liquidated":
+            continue
+        if verbose:
+            logger.info("\n" + "=" * 50)
+            logger.info(
+                f"Training event pair {pair_idx}/{total_pairs}: {index_event} -> {outcome_event}"
+            )
+            logger.info("" + "=" * 50)
+
+        get_model_for_pair_and_date(
+            index_event, outcome_event, model_date=model_date, verbose=verbose
+        )
+
+    if verbose:
+        logger.info("\n\nAll prediction files have been generated.")

@@ -12,38 +12,7 @@ import argparse
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
 from datetime import datetime
-
-outputFile = "output7.log"
-# Module logger
-logger = logging.getLogger(__name__)
-# File handler: capture all log levels to file
-_file_handler = logging.FileHandler(outputFile)
-_file_handler.setLevel(logging.DEBUG)
-_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-logger.addHandler(_file_handler)
-# Ensure logger forwards all levels to handlers (file will receive DEBUG+)
-logger.setLevel(logging.DEBUG)
-logger.propagate = False
-
-
-def set_log_file(path: str, file_level: str | int = "DEBUG"):
-    """Change the log file path and level. File will receive all levels at or above file_level."""
-    # remove old file handler
-    global _file_handler
-    try:
-        logger.removeHandler(_file_handler)
-    except Exception:
-        pass
-    _file_handler = logging.FileHandler(path)
-    if isinstance(file_level, str):
-        lvl = getattr(logging, file_level.upper(), logging.DEBUG)
-    else:
-        lvl = int(file_level)
-    _file_handler.setLevel(lvl)
-    _file_handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    )
-    logger.addHandler(_file_handler)
+from utils.simulations import get_simulation_outcome
 
 
 # Make the bundled Aave-Simulator directory importable (it's next to this file)
@@ -58,7 +27,6 @@ if aave_sim_path not in sys.path:
 # not a valid module name.
 from profile_gen.user_profile_generator import UserProfileGenerator
 from profile_gen.wallet_inference import WalletInferencer
-from tools.run_single_simulation import run_simulation
 
 PROFILES_DIR = "./profiles/"
 
@@ -221,37 +189,6 @@ stats_no_dust = {
     "by_outcome_action": {},
     "by_action_pair": {},
 }
-
-
-def load_results_cache(recommendation, suffix, **passed_args):
-    """Load cached simulation results or compute and cache them."""
-    key = f"{recommendation['user']}_{int(recommendation.get('timestamp', 0))}_{suffix}"
-    results_cache_file = Path(SIMULATION_RESULTS_CACHE_DIR) / f"{key}.pkl"
-    # logger.debug("Checkpoint 7.6")
-
-    # Try to load from cache
-    if results_cache_file.exists():
-        try:
-            with open(results_cache_file, "rb") as f:
-                return pkl.load(f)
-        except Exception as e:
-            logger.debug(f"Failed to load cache {results_cache_file}: {e}")
-    # logger.debug("Checkpoint 7.7")
-
-    # Cache miss - compute results
-    results = run_simulation(**passed_args)
-    # logger.debug("Checkpoint 7.8")
-
-    # Save to cache (best effort)
-    try:
-        Path(SIMULATION_RESULTS_CACHE_DIR).mkdir(parents=True, exist_ok=True)
-        with open(results_cache_file, "wb") as f:
-            pkl.dump(results, f)
-    except Exception as e:
-        logger.debug(f"Failed to save cache {results_cache_file}: {e}")
-    # logger.debug("Checkpoint 7.9")
-
-    return results
 
 
 def convert_to_json_serializable(obj):
@@ -1449,7 +1386,7 @@ def process_recommendation(item):
         # - Effective liquidation threshold checks
         # Uses INVESTIGATION_PARAMS defaults (oracle_delay=300s, margin_threshold=1.10, volatility_discount=0.08)
         try:
-            results_without_recommendation = load_results_cache(
+            results_without_recommendation = get_simulation_outcome(
                 recommendation,
                 "without",
                 profile=user_profile,
@@ -1532,7 +1469,7 @@ def process_recommendation(item):
             1, lookahead_seconds - (recommendation_timestamp - cutoff_timestamp) * 2
         )
         try:
-            results_with_recommendation = load_results_cache(
+            results_with_recommendation = get_simulation_outcome(
                 recommendation,
                 "with",
                 profile=user_profile_with,
