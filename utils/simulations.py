@@ -3,12 +3,14 @@ import pickle as pkl
 import os
 import sys
 
+import numpy as np
+
 from utils.logger import logger
-from utils.constants import SIMULATION_RESULTS_CACHE_DIR
+from utils.constants import MIN_RECOMMENDATION_DEBT_USD, SIMULATION_RESULTS_CACHE_DIR
 
 # Make the bundled Aave-Simulator directory importable (it's next to this file)
 this_dir = os.path.dirname(os.path.realpath(__file__))
-aave_sim_path = os.path.join(this_dir, "Aave-Simulator")
+aave_sim_path = os.path.join(this_dir, "..", "Aave-Simulator")
 if aave_sim_path not in sys.path:
     sys.path.insert(0, aave_sim_path)
 
@@ -44,3 +46,70 @@ def get_simulation_outcome(recommendation, suffix, **passed_args):
     # logger.debug("Checkpoint 7.9")
 
     return results
+
+
+def updateAmountOrUSD(recommendation, amount=None, amountUSD=None):
+    if amount is None and amountUSD is None:
+        return
+    price = recommendation["priceInUSD"]
+    recommendation["amount"] = amount if amount is not None else amountUSD / price
+    recommendation["amountUSD"] = amountUSD if amountUSD is not None else amount * price
+
+    # Use numpy.log1p when available; fall back to math.log1p if `np` is shadowed.
+    try:
+        log1p_fn = np.log1p
+    except Exception:
+        import math
+
+        log1p_fn = math.log1p
+    recommendation["logAmountUSD"] = float(log1p_fn(float(recommendation["amountUSD"])))
+    recommendation["logAmount"] = float(log1p_fn(float(recommendation["amount"])))
+
+
+def update_recommendation_if_necessary(recommendation, results_without_recommendation):
+    if recommendation["Index Event"] != "repay":
+        return recommendation
+
+    # Get symbol from recommendation - try 'symbol' first, then 'reserve' as fallback
+    symbol = recommendation.get("symbol") or recommendation.get("reserve")
+    if not symbol:
+        logger.warning(
+            f"Recommendation missing 'symbol' and 'reserve' fields for repay action. "
+            f"Available keys: {list(recommendation.keys())}. Skipping update."
+        )
+        return recommendation
+
+    # walletSymbolAmount = wallet_balances.get(symbol, 0)
+    # if walletSymbolAmount < recommendation['amount']:
+    #     updateAmountOrUSD(recommendation, amount = walletSymbolAmount)
+    total_debt_usd = results_without_recommendation["final_state"]["total_debt_usd"]
+    amount_usd = recommendation["amountUSD"]
+    estimated_remaining_debt = max(0, total_debt_usd - amount_usd)
+    # if not (
+    #     estimated_remaining_debt > 0
+    #     and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD
+    # ):
+    #     return recommendation
+    # elif (
+    #     recommendation["Index Event"] != "repay"
+    # ):  # Comment out these if and return statements for potential performance increase for deposit recommendations
+    #     return None
+    if (
+        recommendation["Index Event"] != "repay" and (estimated_remaining_debt > 0
+        and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD)
+    ):  # Comment out these if and return statements for potential performance increase for deposit recommendations
+        return None
+
+    wallet_balances = results_without_recommendation["final_state"]["wallet_balances"]
+    maxWalletSymbol = max(wallet_balances, key=wallet_balances.get)
+    maxWalletValue = wallet_balances.get(maxWalletSymbol, 0)
+
+    recommendation["symbol"] = recommendation["reserve"] = maxWalletSymbol
+    updateAmountOrUSD(recommendation, amount=maxWalletValue)
+
+    # updateAmountOrUSD(recommendation, amountUSD = total_debt_usd*1.01)
+
+    # if walletSymbolAmount < recommendation['amount']:
+    #     updateAmountOrUSD(recommendation, amount = walletSymbolAmount)
+
+    return recommendation

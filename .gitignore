@@ -12,3 +12,4 @@ analysis_output/
 .venv/
 config.json
 settings.json
+outputs/

@@ -4,11 +4,11 @@ import os
 import pickle as pkl
 import glob
 import pyreadr
-from utils.logger import logger
 from utils.data import get_event_df
 from utils.model_training import preprocess, get_model_for_pair_and_date
-
 from utils.constants import *
+from utils.logger import logger, set_log_file
+set_log_file("output_recommendationGeneration.log")
 
 np.random.seed(seed)
 
@@ -58,6 +58,7 @@ def get_expected_time_to_event(model, X_test, baseline_meta, max_prediction_days
 
 
 DATE_RANGES_CACHE = None
+
 
 def get_date_ranges():
     global DATE_RANGES_CACHE
@@ -115,6 +116,7 @@ def get_user_history(user_id: str, up_to_timestamp: int) -> pd.DataFrame:
         user_history_df = user_history_df.tail(10000).reset_index(drop=True)
     return user_history_df
 
+
 def calc_predictions(index_event_value, group, results, model_date, user_history):
     # use title-case when requesting model (keeps previous behavior)
     index_event_title = str(index_event_value).title()
@@ -163,9 +165,7 @@ def calc_predictions(index_event_value, group, results, model_date, user_history
 
         # Predict in batch and map predictions back to timestamps
         try:
-            time_preds = get_expected_time_to_event(
-                model, test_features, baseline_meta
-            )
+            time_preds = get_expected_time_to_event(model, test_features, baseline_meta)
         except Exception:
             # If prediction fails for any reason, mark as None
             logger.warning(
@@ -182,9 +182,7 @@ def calc_predictions(index_event_value, group, results, model_date, user_history
             results[ts][outcome_event] = float(time_pred)
 
 
-def get_transaction_history_predictions(
-    row: pd.Series
-) -> pd.DataFrame:
+def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
     results_cache_file = os.path.join(
         RESULTS_CACHE_DIR,
         f"{row['user']}_{row['timestamp']}_{row['amount']}.pkl",
@@ -210,9 +208,8 @@ def get_transaction_history_predictions(
             except Exception:
                 continue
             else:
-                
-                break
 
+                break
 
     # Build cache-aware, batched prediction: group history rows by Index Event
     # If we loaded an alternative cache file above, start from that and only
@@ -223,14 +220,22 @@ def get_transaction_history_predictions(
     user_history = get_user_history(
         user_id=row["user"], up_to_timestamp=row["timestamp"] - 1
     )
-    row_df = row.to_frame().T
-    user_history = pd.concat([user_history, row_df]).reset_index(drop=True)
+    if user_history.empty:
+        user_history = row.to_frame().T
+    else:
+        user_history = pd.concat([user_history, row.to_frame().T]).reset_index(drop=True)
 
     model_date = dates[dates <= pd.to_datetime(row["timestamp"], unit="s")].max()
 
     if cached_results is not None:
         results = cached_results
-        calc_predictions(row["Index Event"], row_df, results, model_date, user_history)
+        calc_predictions(
+            row["Index Event"],
+            user_history.iloc[[-1]],
+            results,
+            model_date,
+            user_history,
+        )
     else:
         # initialize results structure for each timestamp (preserve existing cached keys)
         results = {}
@@ -247,7 +252,9 @@ def get_transaction_history_predictions(
                 total_groups,
                 index_event_value,
             )
-            calc_predictions(index_event_value, group, results, model_date, user_history)
+            calc_predictions(
+                index_event_value, group, results, model_date, user_history
+            )
 
     with open(
         results_cache_file,
@@ -623,7 +630,9 @@ def optimize_recommendation(row: pd.Series, recommended_action: str):
     from utils.constants import MIN_RECOMMENDATION_AMOUNT
 
     # Start with minimum amount instead of fixed 10
-    price = max(row.get("priceInUSD", 1.0) if pd.notna(row.get("priceInUSD")) else 1.0, 0.0001)
+    price = max(
+        row.get("priceInUSD", 1.0) if pd.notna(row.get("priceInUSD")) else 1.0, 0.0001
+    )
     initial_amount = max(
         MIN_RECOMMENDATION_AMOUNT / price, 10.0
     )  # At least MIN_RECOMMENDATION_AMOUNT USD or 10 tokens
