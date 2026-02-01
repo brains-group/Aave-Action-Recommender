@@ -11,7 +11,7 @@ from multiprocessing import Pool, cpu_count
 from pathlib import Path
 from datetime import datetime
 
-from utils.simulations import get_simulation_outcome, update_recommendation_if_necessary
+from utils.simulations import get_limited_user_profile, get_simulation_outcome, get_user_profile, update_recommendation_if_necessary
 from utils.constants import *
 from utils.logger import logger, set_log_file
 set_log_file("output_simulations.log")
@@ -1002,144 +1002,22 @@ def process_recommendation(item):
                 "stats_updates": {},
             }
 
-        user = recommendation.get("user")
-        if not user:
-            logger.warning(
-                f"Recommendation missing 'user' field: {recommendation.keys() if hasattr(recommendation, 'keys') else 'N/A'}"
-            )
+        return_values = get_limited_user_profile(recommendation, return_extras=True)
+        if return_values is None:
+            logger.warning("Failure in retrieving user profile information.")
             return {
                 "success": False,
-                "error": "Missing user field",
+                "error": f"Failure in retrieving user profile information.",
                 "stats_updates": {},
             }
+        user_profile, recommendation_timestamp, cutoff_timestamp, user, future_transactions, lookahead_seconds = return_values
 
-        timestamp = recommendation.get("timestamp")
-        if timestamp is None:
-            logger.warning(f"Recommendation missing 'timestamp' field for user {user}")
-            return {
-                "success": False,
-                "error": "Missing timestamp field",
-                "stats_updates": {},
-            }
 
         # Extract liquidation info with defaults
         is_at_risk = liquidation_info.get("is_at_risk", False)
         is_at_immediate_risk = liquidation_info.get("is_at_immediate_risk", False)
         most_recent_predictions = liquidation_info.get("most_recent_predictions")
         trend_slopes = liquidation_info.get("trend_slopes")
-        # Search for profile in both non_liquidated_profiles and liquidated_profiles subdirectories
-        # PROFILES_DIR should point to a directory containing both subdirectories
-        profiles_base = Path(PROFILES_DIR).expanduser()
-
-        # Primary search paths: check the standard structure first
-        # 1. non_liquidated_profiles/profiles/
-        # 2. liquidated_profiles/profiles/
-        search_paths = [
-            profiles_base
-            / "non_liquidated_profiles"
-            / "profiles"
-            / f"user_{user}.json",
-            profiles_base / "liquidated_profiles" / "profiles" / f"user_{user}.json",
-        ]
-
-        # Fallback: try directly in PROFILES_DIR (backward compatibility)
-        search_paths.append(profiles_base / f"user_{user}.json")
-
-        user_profile_file = None
-        for search_path in search_paths:
-            if search_path.exists():
-                user_profile_file = search_path
-                logger.debug(f"Found profile for user {user} at: {user_profile_file}")
-                break
-
-        if user_profile_file is None:
-            # Only show first few paths in warning to avoid cluttering logs
-            paths_displayed = "\n".join([f"  - {p}" for p in search_paths[:3]])
-            logger.warning(
-                f"Did not find profile for user {user} in any of these locations:\n{paths_displayed}\n"
-                f"  ... (checked {len(search_paths)} total locations)\n"
-                f"Skipping..."
-            )
-            return {
-                "success": False,
-                "error": f"Profile file not found for user {user}",
-                "stats_updates": {},
-            }
-        # logger.debug("Checkpoint 1")
-
-        try:
-            with user_profile_file.open("r") as f:
-                user_profile = json.load(f)
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in profile file {user_profile_file}: {e}")
-            return {
-                "success": False,
-                "error": f"Invalid JSON: {e}",
-                "stats_updates": {},
-            }
-        except Exception as e:
-            logger.error(f"Error reading profile file {user_profile_file}: {e}")
-            return {
-                "success": False,
-                "error": f"Error reading profile: {e}",
-                "stats_updates": {},
-            }
-        # logger.debug("Checkpoint 2")
-
-        if not isinstance(user_profile, dict):
-            logger.error(
-                f"Invalid profile format for user {user}: expected dict, got {type(user_profile)}"
-            )
-            return {
-                "success": False,
-                "error": f"Invalid profile format: {type(user_profile)}",
-                "stats_updates": {},
-            }
-        # logger.debug("Checkpoint 3")
-
-        if "transactions" not in user_profile:
-            logger.warning(f"Profile for user {user} missing 'transactions' field")
-            user_profile["transactions"] = []
-        # logger.debug("Checkpoint 4")
-
-        # Use the recommendation timestamp as the cutoff point
-        # Transactions <= this timestamp are historical, > this timestamp are future
-        recommendation_timestamp = float(timestamp)
-        cutoff_timestamp = recommendation_timestamp - DEFAULT_TIME_DELTA_SECONDS
-
-        # --- Start of new logic for prediction validation ---
-        original_transactions = user_profile.get("transactions", [])
-
-        if not original_transactions:
-            logger.warning(f"No transactions found in profile for user {user}")
-            return {
-                "success": False,
-                "error": "No transactions in profile",
-                "stats_updates": {},
-            }
-        # logger.debug("Checkpoint 5")
-
-        # Filter transactions in a single pass: historical (<= timestamp) vs future (> timestamp)
-        # Note: We use <= for historical to include transactions at exactly the recommendation time
-        historical_transactions = []
-        future_transactions = []
-        for tx in original_transactions:
-            if not isinstance(tx, dict):
-                continue
-            tx_timestamp = tx.get("timestamp", 0)
-            if tx_timestamp <= cutoff_timestamp:
-                historical_transactions.append(tx)
-            else:
-                future_transactions.append(tx)
-        # logger.debug("Checkpoint 6")
-
-        # Sort future transactions by timestamp (needed for first liquidation lookup)
-        if future_transactions:
-            future_transactions.sort(key=lambda x: x.get("timestamp", 0))
-
-        # For "without recommendation" simulation: use only historical transactions
-        # (No need to copy - we'll create a deepcopy later for "with" profile)
-        user_profile["transactions"] = historical_transactions
 
         if not user_profile["transactions"]:
             logger.warning(
@@ -1296,21 +1174,6 @@ def process_recommendation(item):
                         for bucket in stat_buckets:
                             bucket["prediction_matches_next_action_ts"] += 1
         # --- End of new logic ---
-
-        # Calculate lookahead: simulate forward from recommendation time to check for liquidation
-        # Use the last future transaction timestamp if available, otherwise default to 7 days ahead
-        if future_transactions:
-            last_future_tx_timestamp = future_transactions[-1].get("timestamp")
-            if last_future_tx_timestamp:
-                lookahead_seconds = (
-                    max(1, int(last_future_tx_timestamp - cutoff_timestamp)) * 2
-                )
-            else:
-                lookahead_seconds = DEFAULT_LOOKAHEAD_SECONDS
-        else:
-            # No future transactions, simulate 7 days ahead to see if liquidation occurs
-            lookahead_seconds = DEFAULT_LOOKAHEAD_SECONDS
-        # logger.debug("Checkpoint 7.5")
 
         # Run (or load) results without the recommendation
         # This simulates: "What happens if user continues without taking the recommendation?"

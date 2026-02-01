@@ -8,6 +8,12 @@ from utils.data import get_event_df
 from utils.model_training import preprocess, get_model_for_pair_and_date
 from utils.constants import *
 from utils.logger import logger, set_log_file
+from utils.simulations import (
+    get_limited_user_profile,
+    get_price_history_value,
+    get_simulation_outcome,
+)
+
 set_log_file("output_recommendationGeneration.log")
 
 np.random.seed(seed)
@@ -223,7 +229,9 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
     if user_history.empty:
         user_history = row.to_frame().T
     else:
-        user_history = pd.concat([user_history, row.to_frame().T]).reset_index(drop=True)
+        user_history = pd.concat([user_history, row.to_frame().T]).reset_index(
+            drop=True
+        )
 
     model_date = dates[dates <= pd.to_datetime(row["timestamp"], unit="s")].max()
 
@@ -433,6 +441,7 @@ def generate_next_transaction(
     action_type: str,
     amount=10.0,
     time_delta_seconds=DEFAULT_TIME_DELTA_SECONDS,
+    reserve=None,
 ):
     """
     Generates a new transaction row 'soon after' the previous row.
@@ -498,6 +507,10 @@ def generate_next_transaction(
     new_row["logAmount"] = float(log1p_fn(float(amount)))
 
     # Calculate USD Amount (assuming price is static for the short interval)
+    # We can't get the actual conversion rate for the future time because that would be cheating
+    if reserve:
+        new_row["reserve"] = reserve
+        new_row["priceInUSD"] = get_price_history_value(reserve, prev_ts)
     price = new_row["priceInUSD"]
     amount_usd = amount * price
     new_row["amountUSD"] = amount_usd
@@ -627,52 +640,61 @@ def _would_create_dust_position(
 
 
 def optimize_recommendation(row: pd.Series, recommended_action: str):
-    from utils.constants import MIN_RECOMMENDATION_AMOUNT
+    min_recommendation = MIN_RECOMMENDATION_AMOUNT
+    max_recommendation = 100000
 
-    # Start with minimum amount instead of fixed 10
-    price = max(
-        row.get("priceInUSD", 1.0) if pd.notna(row.get("priceInUSD")) else 1.0, 0.0001
-    )
-    initial_amount = max(
-        MIN_RECOMMENDATION_AMOUNT / price, 10.0
-    )  # At least MIN_RECOMMENDATION_AMOUNT USD or 10 tokens
+    sample_action = generate_next_transaction(row, recommended_action)
+    return_values = get_limited_user_profile(sample_action, return_extras=True)
+    reserve = None
+    if return_values is not None:
+        (
+            user_profile,
+            _,
+            _,
+            _,
+            _,
+            lookahead_seconds,
+        ) = return_values
+        simulation_results = get_simulation_outcome(
+            sample_action,
+            "without",
+            profile=user_profile,
+            lookahead_seconds=lookahead_seconds,
+            output_file=logger.handlers[0].baseFilename,
+        )
+        value_pairs = [
+            (reserve, amount * get_price_history_value(reserve, row["timestamp"]))
+            for reserve, amount in simulation_results["final_state"][
+                "wallet_balances"
+            ].items()
+        ]
+        reserve = max(value_pairs, key=value_pairs[1])[0]
+        max_recommendation = simulation_results["final_state"]["wallet_balances"][
+            reserve
+        ]
+        min_recommendation = min(
+            max(MIN_RECOMMENDATION_AMOUNT, max_recommendation / (2 * 6)),
+            max_recommendation,
+        )
 
     new_action = generate_next_transaction(
         row,
         recommended_action,
-        amount=initial_amount,
+        amount=min_recommendation,
+        reserve=reserve,
     )
 
-    # If risk remains, iteratively increase the amount and log single-action predictions
-    max_iterations = 15  # Prevent infinite loops
-    iteration = 0
     while (
-        determine_liquidation_risk(new_action)[0]
-        and new_action["amount"] < 100000
-        and iteration < max_iterations
+        new_action["amount"] < max_recommendation
+        and determine_liquidation_risk(new_action)[0]
     ):
-        # Check if current recommendation would create dust position
-        if _would_create_dust_position(row, recommended_action, new_action["amount"]):
-            # Skip dust-creating recommendations - increase amount before checking risk again
-            new_action = generate_next_transaction(
-                row,
-                recommended_action,
-                amount=new_action["amount"] * 2,
-            )
-            logger.info(
-                "Skipped dust-creating amount, increased to: %s", new_action["amount"]
-            )
-            iteration += 1
-            continue
-
-        # If not dust, increase amount to reduce liquidation risk
         new_action = generate_next_transaction(
             row,
             recommended_action,
-            amount=new_action["amount"] * 2,
+            amount=min(max_recommendation, new_action["amount"] * 2),
+            reserve=reserve,
         )
         logger.info("Increased amount to: %s", new_action["amount"])
-        iteration += 1
 
     # Final check: if recommendation would create dust, return None or mark as invalid
     if _would_create_dust_position(row, recommended_action, new_action["amount"]):
