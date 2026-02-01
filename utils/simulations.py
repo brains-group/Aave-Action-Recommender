@@ -75,6 +75,16 @@ def updateAmountOrUSD(recommendation, amount=None, amountUSD=None):
     recommendation["logAmount"] = float(log1p_fn(float(recommendation["amount"])))
 
 
+def would_create_dust_position(recommendation, results_without_recommendation):
+    total_debt_usd = results_without_recommendation["final_state"]["total_debt_usd"]
+    amount_usd = recommendation["amountUSD"]
+    estimated_remaining_debt = max(0, total_debt_usd - amount_usd)
+    return recommendation["Index Event"] == "repay" and (
+        estimated_remaining_debt > 0
+        and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD
+    )
+
+
 def update_recommendation_if_necessary(recommendation, results_without_recommendation):
     if recommendation["Index Event"] != "repay":
         return recommendation

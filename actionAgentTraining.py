@@ -3,8 +3,7 @@ import numpy as np
 import os
 import pickle as pkl
 import glob
-import pyreadr
-from utils.data import get_event_df
+from utils.data import get_date_ranges, get_event_df, get_train_set
 from utils.model_training import preprocess, get_model_for_pair_and_date
 from utils.constants import *
 from utils.logger import logger, set_log_file
@@ -12,6 +11,7 @@ from utils.simulations import (
     get_limited_user_profile,
     get_price_history_value,
     get_simulation_outcome,
+    would_create_dust_position,
 )
 
 set_log_file("output_recommendationGeneration.log")
@@ -62,32 +62,6 @@ def get_expected_time_to_event(model, X_test, baseline_meta, max_prediction_days
 
     return window_seconds / probability
 
-
-DATE_RANGES_CACHE = None
-
-
-def get_date_ranges():
-    global DATE_RANGES_CACHE
-    if os.path.exists(os.path.join(CACHE_DIR, "date_ranges.pkl")):
-        with open(os.path.join(CACHE_DIR, "date_ranges.pkl"), "rb") as f:
-            DATE_RANGES_CACHE = pkl.load(f)
-    if DATE_RANGES_CACHE is not None:
-        return DATE_RANGES_CACHE
-    transactions_df = pyreadr.read_r("./data/transactions.rds")[None]
-    min_date = transactions_df["timestamp"].min() * 1e9
-    logger.debug(f"min_date: {min_date}")
-    max_date = transactions_df["timestamp"].max() * 1e9
-    logger.debug(f"max_date: {max_date}")
-    train_start_date = min_date + 0.4 * (max_date - min_date)
-    logger.debug(f"train_start_date: {train_start_date}")
-    test_start_date = min_date + 0.8 * (max_date - min_date)
-    logger.debug(f"test_start_date: {test_start_date}")
-    train_dates = pd.date_range(start=train_start_date, end=test_start_date, freq="2W")
-    test_dates = pd.date_range(start=test_start_date, end=max_date, freq="2W")
-    with open(os.path.join(CACHE_DIR, "date_ranges.pkl"), "wb") as f:
-        pkl.dump((train_dates, test_dates), f)
-    DATE_RANGES_CACHE = (train_dates, test_dates)
-    return train_dates, test_dates
 
 
 def get_user_history(user_id: str, up_to_timestamp: int) -> pd.DataFrame:
@@ -557,88 +531,6 @@ def generate_next_transaction(
     return new_row
 
 
-def _would_create_dust_position(
-    row: pd.Series, recommended_action: str, amount: float
-) -> bool:
-    """
-    Estimate if a recommendation would create a dust position.
-
-    Based on analysis findings:
-    - Dust liquidations: total_debt_usd < $1.00 or total_collateral_usd < $10.00
-    - We estimate the final position after the recommendation
-
-    Args:
-        row: Current user state row
-        recommended_action: Action type (Deposit, Repay, etc.)
-        amount: Recommended amount
-
-    Returns:
-        True if recommendation would likely create dust position, False otherwise
-    """
-    from utils.constants import (
-        MIN_RECOMMENDATION_DEBT_USD,
-        MIN_RECOMMENDATION_COLLATERAL_USD,
-        MIN_RECOMMENDATION_AMOUNT,
-    )
-
-    action = recommended_action.lower()
-    amount_usd = (
-        amount * row.get("priceInUSD", 1.0)
-        if pd.notna(row.get("priceInUSD"))
-        else amount
-    )
-
-    # Check minimum amount threshold
-    if amount_usd < MIN_RECOMMENDATION_AMOUNT:
-        return True
-
-    # For Repay actions: estimate if remaining debt would be dust
-    if action == "repay":
-        # Estimate current debt from row data
-        # Try to get debt from available fields, or use a conservative estimate
-        estimated_debt_usd = row.get("totalDebtUSD", 0.0)
-        if pd.isna(estimated_debt_usd) or estimated_debt_usd == 0:
-            # Fallback: use a conservative estimate based on user stats
-            estimated_debt_usd = row.get("userBorrowSumUSD", 0.0)
-
-        estimated_remaining_debt = max(0, estimated_debt_usd - amount_usd)
-        if (
-            estimated_remaining_debt > 0
-            and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD
-        ):
-            return True
-
-    # For Deposit actions: estimate if position would result in dust collateral
-    elif action == "deposit":
-        # For deposits, we're adding collateral, so unlikely to create dust debt
-        # But if the user has very little debt and we're depositing, check if
-        # the resulting position might be problematic
-        estimated_debt_usd = row.get("totalDebtUSD", 0.0)
-        if pd.isna(estimated_debt_usd):
-            estimated_debt_usd = row.get("userBorrowSumUSD", 0.0)
-
-        # If debt is very small (< $1) and we're just depositing without repaying,
-        # this might create a dust-like position
-        if estimated_debt_usd > 0 and estimated_debt_usd < MIN_RECOMMENDATION_DEBT_USD:
-            # Depositing while having dust debt could be problematic
-            return True
-
-    # For Withdraw actions: check if withdrawal would leave insufficient collateral
-    elif action == "withdraw":
-        estimated_collateral_usd = row.get("totalCollateralUSD", 0.0)
-        if pd.isna(estimated_collateral_usd):
-            estimated_collateral_usd = row.get("userDepositSumUSD", 0.0)
-
-        estimated_remaining_collateral = max(0, estimated_collateral_usd - amount_usd)
-        if (
-            estimated_remaining_collateral > 0
-            and estimated_remaining_collateral < MIN_RECOMMENDATION_COLLATERAL_USD
-        ):
-            return True
-
-    return False
-
-
 def optimize_recommendation(row: pd.Series, recommended_action: str):
     min_recommendation = MIN_RECOMMENDATION_AMOUNT
     max_recommendation = 100000
@@ -697,12 +589,14 @@ def optimize_recommendation(row: pd.Series, recommended_action: str):
         logger.info("Increased amount to: %s", new_action["amount"])
 
     # Final check: if recommendation would create dust, return None or mark as invalid
-    if _would_create_dust_position(row, recommended_action, new_action["amount"]):
-        logger.warning(
-            "Recommendation would create dust position (amount=%.2f, action=%s). "
-            "Consider not recommending this action.",
-            new_action["amount"],
+    if return_values is not None and would_create_dust_position(
+        new_action, simulation_results
+    ):
+        new_action = generate_next_transaction(
+            row,
             recommended_action,
+            amount=max_recommendation,
+            reserve=reserve,
         )
     return new_action
 
@@ -734,108 +628,12 @@ def recommend_action(row: pd.Series):
     # Optimize recommendation with dust filtering
     optimized_action = optimize_recommendation(row, recommended_action)
 
-    # Final check: if optimized action would still create dust, log warning
-    # The optimize_recommendation function already handles dust checking internally,
-    # but we do a final verification here
-    if optimized_action is not None:
-        amount_usd = (
-            optimized_action.get("amountUSD", 0.0)
-            if hasattr(optimized_action, "get")
-            else (
-                optimized_action["amount"] * optimized_action.get("priceInUSD", 1.0)
-                if pd.notna(optimized_action.get("priceInUSD"))
-                else optimized_action["amount"]
-            )
-        )
-        if _would_create_dust_position(
-            row, recommended_action, optimized_action["amount"]
-        ):
-            logger.warning(
-                "Final recommendation for user %s would create dust position. "
-                "Action: %s, Amount: %.2f (%.2f USD). Recommendation may be filtered out.",
-                row.get("user", "unknown"),
-                recommended_action,
-                optimized_action["amount"],
-                amount_usd,
-            )
-
     return optimized_action, {
         "is_at_risk": is_at_risk,
         "is_at_immediate_risk": is_at_immediate_risk,
         "most_recent_predictions": most_recent_predictions,
         "trend_slopes": trend_slopes,
     }
-
-
-def get_train_set():
-    TRAIN_SET_CACHE_PATH = os.path.join(CACHE_DIR, "train_set.csv")
-    if os.path.exists(TRAIN_SET_CACHE_PATH):
-        train_set = pd.read_csv(TRAIN_SET_CACHE_PATH)
-    else:
-        train_set = pd.DataFrame()
-        train_ranges, test_ranges = get_date_ranges()
-        min_train_date = train_ranges[0].timestamp()
-        max_train_date = test_ranges[0].timestamp()
-        event_pairs = [
-            (ie, oe) for ie in EVENTS for oe in EVENTS if not (ie == oe == "Liquidated")
-        ]
-        for index_event, outcome_event in event_pairs:
-            # log progress for building the train set
-            logger.info(
-                "Building train_set: processing %s->%s", index_event, outcome_event
-            )
-            df = get_event_df(index_event, outcome_event)
-            if df is None:
-                continue
-            # logger = logging.getLogger(__name__)
-            logger.info(f"Processing {index_event}->{outcome_event}")
-            logger.debug(f"Data has {len(df)} rows")
-            logger.debug(f"Min timestamp: {df['timestamp'].min()}")
-            logger.debug(f"Max timestamp: {df['timestamp'].max()}")
-            subsetInRange = df[
-                (df["timestamp"] >= min_train_date) & (df["timestamp"] < max_train_date)
-            ]
-            logger.debug(
-                f"Loaded {len(subsetInRange)} rows for {index_event}->{outcome_event}"
-            )
-            train_set = pd.concat(
-                [
-                    train_set,
-                    subsetInRange.sample(n=300, random_state=seed),
-                ],
-                ignore_index=True,
-            )
-        for index_event in EVENTS:
-            if index_event == "Liquidated":
-                continue
-            outcome_event = "Liquidated"
-            logger.info(
-                "Building train_set: processing %s->%s", index_event, outcome_event
-            )
-            df = get_event_df(index_event, outcome_event)
-            if df is None:
-                continue
-            logger.info(f"Processing {index_event}->{outcome_event}")
-            logger.debug(f"Data has {len(df)} rows")
-            logger.debug(f"Min timestamp: {df['timestamp'].min()}")
-            logger.debug(f"Max timestamp: {df['timestamp'].max()}")
-            subsetInRange = df[
-                (df["timestamp"] >= min_train_date) & (df["timestamp"] < max_train_date)
-            ]
-            logger.debug(
-                f"Loaded {len(subsetInRange)} rows for {index_event}->{outcome_event}"
-            )
-            train_set = pd.concat(
-                [
-                    train_set,
-                    subsetInRange.sort_values(by="timeDiff").head(300),
-                ],
-                ignore_index=True,
-            )
-        with open(TRAIN_SET_CACHE_PATH, "w") as f:
-            train_set.to_csv(f, index=False)
-
-    return train_set
 
 
 def run_training_pipeline():
