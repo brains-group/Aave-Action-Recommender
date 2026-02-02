@@ -179,19 +179,29 @@ def get_train_set():
                     chosen_transaction = filtered_transactions[
                         random.choice(pair_indexes)
                     ]
-                    event_df = get_event_df(**event_pair)
-                    index_event = event_pair[0]
+                    event_df = get_event_df(event_pair[0], event_pair[1])
                     timestamp = chosen_transaction["timestamp"]
-                    row = event_df[
+                    splice = event_df[
                         (event_df["user"] == user)
-                        & (event_df["Index Event"] == index_event)
                         & (event_df["timestamp"] == timestamp)
-                    ].iloc[0]
+                    ]
+                    if splice.empty:
+                        logger.warning(
+                            f"Searched for test transaction ({user}, {timestamp}), but not found."
+                        )
+                        continue
+                    row = splice.iloc[0]
                     collected_rows.append(row)
+                    logger.info(
+                        f"Added row of type {event_pair} to collected_rows and reached {len(collected_rows)} rows."
+                    )
+                    break
 
         if len(collected_rows) >= len(event_pairs) * num_per_event_pair:
             break
     train_set = pd.concat(collected_rows, axis=1).T
+    with open(TRAIN_SET_CACHE_PATH, "w") as f:
+        train_set.to_csv(f, index=False)
     return train_set
 
 

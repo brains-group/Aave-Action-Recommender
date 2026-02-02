@@ -197,6 +197,7 @@ def get_limited_user_profile(recommendation, return_extras=False):
         )
     return user_profile
 
+_price_timestamps_cache = {}
 
 def get_price_history_value(symbol, timestamp):
     global _price_timestamps_cache
