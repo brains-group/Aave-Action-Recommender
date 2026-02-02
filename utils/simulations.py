@@ -1,5 +1,4 @@
 import bisect
-import json
 from pathlib import Path
 import pickle as pkl
 import os
@@ -7,13 +6,13 @@ import sys
 
 import numpy as np
 
-from performSimulations import DEFAULT_LOOKAHEAD_SECONDS
+from utils.data import get_user_profile
 from utils.logger import logger
 from utils.constants import (
     DEFAULT_TIME_DELTA_SECONDS,
     MIN_RECOMMENDATION_DEBT_USD,
     SIMULATION_RESULTS_CACHE_DIR,
-    PROFILES_DIR,
+    DEFAULT_LOOKAHEAD_SECONDS,
 )
 
 # Make the bundled Aave-Simulator directory importable (it's next to this file)
@@ -132,64 +131,6 @@ def update_recommendation_if_necessary(recommendation, results_without_recommend
     #     updateAmountOrUSD(recommendation, amount = walletSymbolAmount)
 
     return recommendation
-
-
-def get_user_profile(transaction):
-    user = transaction.get("user")
-
-    # Search for profile in both non_liquidated_profiles and liquidated_profiles subdirectories
-    # PROFILES_DIR should point to a directory containing both subdirectories
-    profiles_base = Path(PROFILES_DIR).expanduser()
-
-    # Primary search paths: check the standard structure first
-    # 1. non_liquidated_profiles/profiles/
-    # 2. liquidated_profiles/profiles/
-    search_paths = [
-        profiles_base / "non_liquidated_profiles" / "profiles" / f"user_{user}.json",
-        profiles_base / "liquidated_profiles" / "profiles" / f"user_{user}.json",
-    ]
-
-    # Fallback: try directly in PROFILES_DIR (backward compatibility)
-    search_paths.append(profiles_base / f"user_{user}.json")
-
-    user_profile_file = None
-    for search_path in search_paths:
-        if search_path.exists():
-            user_profile_file = search_path
-            logger.debug(f"Found profile for user {user} at: {user_profile_file}")
-            break
-
-    if user_profile_file is None:
-        # Only show first few paths in warning to avoid cluttering logs
-        paths_displayed = "\n".join([f"  - {p}" for p in search_paths[:3]])
-        logger.warning(
-            f"Did not find profile for user {user} in any of these locations:\n{paths_displayed}\n"
-            f"  ... (checked {len(search_paths)} total locations)\n"
-            f"Skipping..."
-        )
-        return None
-
-    try:
-        with user_profile_file.open("r") as f:
-            user_profile = json.load(f)
-    except json.JSONDecodeError as e:
-        logger.error(f"Invalid JSON in profile file {user_profile_file}: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Error reading profile file {user_profile_file}: {e}")
-        return None
-
-    if not isinstance(user_profile, dict):
-        logger.error(
-            f"Invalid profile format for user {user}: expected dict, got {type(user_profile)}"
-        )
-        return None
-
-    if "transactions" not in user_profile:
-        logger.warning(f"Profile for user {user} missing 'transactions' field")
-        user_profile["transactions"] = []
-
-    return user_profile
 
 
 def get_limited_user_profile(recommendation, return_extras=False):

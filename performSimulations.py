@@ -11,7 +11,8 @@ from multiprocessing import Pool, cpu_count
 from pathlib import Path
 from datetime import datetime
 
-from utils.simulations import get_limited_user_profile, get_simulation_outcome, get_user_profile, update_recommendation_if_necessary
+from utils.data import get_user_profile
+from utils.simulations import get_limited_user_profile, get_simulation_outcome, update_recommendation_if_necessary
 from utils.constants import *
 from utils.logger import logger, set_log_file
 set_log_file("output_simulations.log")
@@ -29,12 +30,6 @@ if aave_sim_path not in sys.path:
 # not a valid module name.
 from profile_gen.user_profile_generator import UserProfileGenerator
 from profile_gen.wallet_inference import WalletInferencer
-
-PROFILES_DIR = "./profiles/"
-
-# Constants
-DEFAULT_LOOKAHEAD_DAYS = 7
-DEFAULT_LOOKAHEAD_SECONDS = 86400 * DEFAULT_LOOKAHEAD_DAYS
 
 # Ensure cache directories exist at startup (performance optimization)
 Path(SIMULATION_RESULTS_CACHE_DIR).mkdir(parents=True, exist_ok=True)
