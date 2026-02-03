@@ -1,8 +1,10 @@
+import argparse
 import pandas as pd
 import numpy as np
 import os
 import pickle as pkl
 import glob
+from multiprocessing import Pool, cpu_count
 from utils.data import get_date_ranges, get_event_df, get_train_set
 from utils.model_training import preprocess, get_model_for_pair_and_date
 from utils.constants import *
@@ -61,7 +63,6 @@ def get_expected_time_to_event(model, X_test, baseline_meta, max_prediction_days
     probability = np.maximum(probability, 1e-12)
 
     return window_seconds / probability
-
 
 
 def get_user_history(user_id: str, up_to_timestamp: int) -> pd.DataFrame:
@@ -560,7 +561,7 @@ def optimize_recommendation(row: pd.Series, recommended_action: str):
                 "wallet_balances"
             ].items()
         ]
-        reserve = max(value_pairs, key=value_pairs[1])[0]
+        reserve = max(value_pairs, key=lambda value_pair: value_pair[1])[0]
         max_recommendation = simulation_results["final_state"]["wallet_balances"][
             reserve
         ]
@@ -636,7 +637,7 @@ def recommend_action(row: pd.Series):
     }
 
 
-def run_training_pipeline():
+def run_training_pipeline(num_workers):
     recommendation_cache_file = RECOMMENDATIONS_FILE
     if os.path.exists(recommendation_cache_file):
         with open(recommendation_cache_file, "rb") as f:
@@ -645,19 +646,66 @@ def run_training_pipeline():
         recommendations = {}
     train_set = get_train_set()
     # with logging_redirect_tqdm():
-    total_rows = train_set.shape[0]
-    for iter_count, row in train_set.iterrows():
-        logger.debug("Processing row %s/%s", iter_count + 1, total_rows)
-        rowID = str(row)
-        if rowID not in recommendations:
-            recommendations[rowID] = recommend_action(row)
-            if iter_count % 1 == 0:
-                with open(recommendation_cache_file, "wb") as f:
-                    pkl.dump(recommendations, f)
-        logger.info("Recommended %s\nfor %s", str(recommendations[rowID]), rowID)
-    # with open(recommendation_cache_file, "wb") as f:
-    #     pkl.dump(recommendations, f)
+
+    # Identify rows that need processing
+    rows_to_process = [row for _, row in train_set.iterrows() if str(row) not in recommendations]
+
+    total_rows_to_process = len(rows_to_process)
+    logger.info(f"Found {total_rows_to_process} rows to process out of {len(train_set)} total rows")
+
+    if num_workers is not None:
+        num_workers = min(num_workers, total_rows_to_process, cpu_count())
+        logger.info(
+            f"Using {num_workers} worker processes (requested: {num_workers}, available cores: {cpu_count()})"
+        )
+    else:
+        num_workers = min(cpu_count(), total_rows_to_process)
+        logger.info(
+            f"Using {num_workers} worker processes (auto-detected, out of {cpu_count()} available CPU cores)"
+        )
+
+    if total_rows_to_process > 0:
+        if num_workers > 1:
+            with Pool(processes=num_workers) as pool:
+                for i, result in enumerate(pool.imap_unordered(recommend_action, rows_to_process)):
+                    recommendations[rowID] = result
+                    logger.info("Recommended %s\nfor row %s", str(result), str(i))
+                    if i % 10 == 0:
+                        with open(recommendation_cache_file, "wb") as f:
+                            pkl.dump(recommendations, f)
+        else:
+            for i, row in enumerate(rows_to_process):
+                rowID = str(row)
+                recommendations[rowID] = recommend_action(row)
+                logger.info("Recommended %s\nfor %s", str(recommendations[rowID]), rowID)
+                if i % 1 == 0:
+                    with open(recommendation_cache_file, "wb") as f:
+                        pkl.dump(recommendations, f)
+
+    with open(recommendation_cache_file, "wb") as f:
+        pkl.dump(recommendations, f)
 
 
 if __name__ == "__main__":
-    run_training_pipeline()
+    parser = argparse.ArgumentParser(
+        description="Run simulations for recommendations with multiprocessing support"
+    )
+    parser.add_argument(
+        "--workers",
+        "-w",
+        type=int,
+        default=None,
+        help=f"Number of worker processes (default: min(available_cores, total_recommendations)). Available cores: {cpu_count()}",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=str,
+        default=None,
+        help="Custom log file path (default: output7.log)",
+    )
+    args = parser.parse_args()
+
+    if args.log_file:
+        set_log_file(args.log_file)
+
+    run_training_pipeline(args.workers)
