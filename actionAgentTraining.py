@@ -4,9 +4,16 @@ import numpy as np
 import os
 import pickle as pkl
 import glob
-from multiprocessing import Pool, cpu_count
-from utils.data import get_date_ranges, get_event_df, get_train_set
-from utils.model_training import preprocess, get_model_for_pair_and_date
+from multiprocessing import Pool, cpu_count, Manager
+from utils.data import get_date_ranges, get_event_df, get_train_set, EVENT_DF_CACHE
+import utils.data
+from utils.model_training import (
+    preprocess,
+    get_model_for_pair_and_date,
+    PREPROCESS_CACHE,
+    MODELS_CACHE,
+)
+import utils.model_training
 from utils.constants import *
 from utils.logger import logger, set_log_file
 from utils.simulations import (
@@ -637,6 +644,16 @@ def recommend_action(row: pd.Series):
     }
 
 
+def init_worker(shared_event_df_cache, shared_preprocess_cache, shared_models_cache):
+    utils.data.EVENT_DF_CACHE = shared_event_df_cache
+    utils.model_training.PREPROCESS_CACHE = shared_preprocess_cache
+    utils.model_training.MODELS_CACHE = shared_models_cache
+
+
+def process_row(row):
+    return str(row), recommend_action(row)
+
+
 def run_training_pipeline(num_workers):
     recommendation_cache_file = RECOMMENDATIONS_FILE
     if os.path.exists(recommendation_cache_file):
@@ -648,10 +665,14 @@ def run_training_pipeline(num_workers):
     # with logging_redirect_tqdm():
 
     # Identify rows that need processing
-    rows_to_process = [row for _, row in train_set.iterrows() if str(row) not in recommendations]
+    rows_to_process = [
+        row for _, row in train_set.iterrows() if str(row) not in recommendations
+    ]
 
     total_rows_to_process = len(rows_to_process)
-    logger.info(f"Found {total_rows_to_process} rows to process out of {len(train_set)} total rows")
+    logger.info(
+        f"Found {total_rows_to_process} rows to process out of {len(train_set)} total rows"
+    )
 
     if num_workers is not None:
         num_workers = min(num_workers, total_rows_to_process, cpu_count())
@@ -666,18 +687,43 @@ def run_training_pipeline(num_workers):
 
     if total_rows_to_process > 0:
         if num_workers > 1:
-            with Pool(processes=num_workers) as pool:
-                for i, result in enumerate(pool.imap_unordered(recommend_action, rows_to_process)):
+            manager = Manager()
+            shared_event_df_cache = manager.dict()
+            shared_event_df_cache.update(EVENT_DF_CACHE)
+            shared_preprocess_cache = manager.dict()
+            shared_preprocess_cache.update(PREPROCESS_CACHE)
+            shared_models_cache = manager.dict()
+            shared_models_cache.update(MODELS_CACHE)
+
+            with Pool(
+                processes=num_workers,
+                initializer=init_worker,
+                initargs=(
+                    shared_event_df_cache,
+                    shared_preprocess_cache,
+                    shared_models_cache,
+                ),
+            ) as pool:
+                for i, (rowID, result) in enumerate(
+                    pool.imap_unordered(process_row, rows_to_process)
+                ):
+                    # This actually prints after the processing but whatever
+                    logger.debug("Processing row %s/%s", i + 1, total_rows_to_process)
+
                     recommendations[rowID] = result
-                    logger.info("Recommended %s\nfor row %s", str(result), str(i))
+                    logger.info("Recommended %s\nfor row %s", str(result), rowID)
                     if i % 1 == 0:
                         with open(recommendation_cache_file, "wb") as f:
                             pkl.dump(recommendations, f)
         else:
             for i, row in enumerate(rows_to_process):
+                logger.debug("Processing row %s/%s", i + 1, total_rows_to_process)
+
                 rowID = str(row)
                 recommendations[rowID] = recommend_action(row)
-                logger.info("Recommended %s\nfor %s", str(recommendations[rowID]), rowID)
+                logger.info(
+                    "Recommended %s\nfor %s", str(recommendations[rowID]), rowID
+                )
                 if i % 1 == 0:
                     with open(recommendation_cache_file, "wb") as f:
                         pkl.dump(recommendations, f)

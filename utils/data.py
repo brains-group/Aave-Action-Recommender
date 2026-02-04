@@ -1,4 +1,5 @@
 import bisect
+import time
 from pathlib import Path
 import random
 import pandas as pd
@@ -22,20 +23,50 @@ def get_event_df(index_event: str, outcome_event: str) -> Optional[pd.DataFrame]
     """
     global EVENT_DF_CACHE
     key = (index_event, outcome_event)
-    if key in EVENT_DF_CACHE:
-        return EVENT_DF_CACHE[key]
-    event_path = os.path.join(DATA_PATH, index_event, outcome_event, "data.csv")
-    if not os.path.exists(event_path):
-        EVENT_DF_CACHE[key] = None
-        return None
-    try:
-        df = pd.read_csv(event_path)
-    except Exception as e:
-        logger.warning(f"Warning: failed to read {event_path}: {e}")
-        EVENT_DF_CACHE[key] = None
-        return None
-    EVENT_DF_CACHE[key] = df
-    return df
+
+    # Unique token for this process's loading attempt
+    loading_token = f"LOADING_{os.getpid()}_{random.randint(0, 1000000)}"
+
+    while True:
+        if key in EVENT_DF_CACHE:
+            val = EVENT_DF_CACHE[key]
+            # Check if it is a loading token
+            if isinstance(val, str) and val.startswith("LOADING_"):
+                time.sleep(1)
+                continue
+            return val
+
+        # Try to claim loading responsibility
+        current_val = EVENT_DF_CACHE.setdefault(key, loading_token)
+
+        if isinstance(current_val, str) and current_val == loading_token:
+            try:
+                logger.info(f"Loading event dataframe for ({index_event}, {outcome_event})...")
+                event_path = os.path.join(DATA_PATH, index_event, outcome_event, "data.csv")
+                if not os.path.exists(event_path):
+                    EVENT_DF_CACHE[key] = None
+                    return None
+                try:
+                    df = pd.read_csv(event_path)
+                except Exception as e:
+                    logger.warning(f"Warning: failed to read {event_path}: {e}")
+                    EVENT_DF_CACHE[key] = None
+                    return None
+                EVENT_DF_CACHE[key] = df
+                logger.info(f"Finished loading event dataframe for ({index_event}, {outcome_event})...")
+                return df
+            except Exception:
+                # If loading fails, clear the token so others can retry
+                if key in EVENT_DF_CACHE and EVENT_DF_CACHE[key] == loading_token:
+                    del EVENT_DF_CACHE[key]
+                raise
+
+        # If we didn't get the lock, wait and retry
+        if isinstance(current_val, str) and current_val.startswith("LOADING_"):
+            time.sleep(1)
+            continue
+
+        return current_val
 
 
 DATE_RANGES_CACHE = None
