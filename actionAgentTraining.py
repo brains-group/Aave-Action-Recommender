@@ -670,7 +670,7 @@ def run_training_pipeline(num_workers):
                 for i, result in enumerate(pool.imap_unordered(recommend_action, rows_to_process)):
                     recommendations[rowID] = result
                     logger.info("Recommended %s\nfor row %s", str(result), str(i))
-                    if i % 10 == 0:
+                    if i % 1 == 0:
                         with open(recommendation_cache_file, "wb") as f:
                             pkl.dump(recommendations, f)
         else:
