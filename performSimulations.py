@@ -1293,9 +1293,9 @@ def process_recommendation(item):
                 "stats_updates": {},
             }
         
-        if (results_without_recommendation['liquidation_stats']['liquidated']) and (results_without_recommendation['liquidation_stats']['time_to_liquidation'] < DEFAULT_TIME_DELTA_SECONDS) and (results_with_recommendation['liquidation_stats']["liquidated"]):
+        if (results_without_recommendation['liquidation_stats']['liquidated']) and (results_without_recommendation['liquidation_stats']['time_to_liquidation'] <= DEFAULT_TIME_DELTA_SECONDS) and (results_with_recommendation['liquidation_stats']["liquidated"]):
             logger.info(
-                f"Skipping because liquidation too fast for user {user}. {results_without_recommendation['liquidation_stats']['time_to_liquidation'] < DEFAULT_TIME_DELTA_SECONDS} {results_without_recommendation['liquidation_stats']['liquidated']} {results_with_recommendation['liquidation_stats']["liquidated"]}"
+                f"Skipping because liquidation too fast for user {user}. {results_without_recommendation['liquidation_stats']['time_to_liquidation'] <= DEFAULT_TIME_DELTA_SECONDS} {results_without_recommendation['liquidation_stats']['liquidated']} {results_with_recommendation['liquidation_stats']["liquidated"]}"
             )
             return {
                 "success": False,
