@@ -80,6 +80,15 @@ def get_new_stats_dict():
         "no_change_with_liquidation": 0,
         "no_change_without_liquidation": 0,
         "time_deltas": [],
+        "delayed_liquidations_1h": 0,
+        "delayed_liquidations_6h": 0,
+        "delayed_liquidations_12h": 0,
+        "delayed_liquidations_24h": 0,
+        "delayed_liquidations_3d": 0,
+        "delayed_liquidations_7d": 0,
+        "delayed_liquidations_31d": 0,
+        "delayed_liquidations_180d": 0,
+        "delayed_liquidations_365d": 0,
         # New stats for prediction validation
         "at_risk": 0,
         "not_at_risk": 0,
@@ -181,6 +190,12 @@ stats = {
     "by_action_pair": {},
 }
 stats_no_dust = {
+    "overall": get_new_stats_dict(),
+    "by_index_action": {},
+    "by_outcome_action": {},
+    "by_action_pair": {},
+}
+stats_hf_only = {
     "overall": get_new_stats_dict(),
     "by_index_action": {},
     "by_outcome_action": {},
@@ -294,6 +309,20 @@ def _print_stats_summary(s: dict, title: str):
         logger.info(
             f"  - Both liquidated:                {no_change_with_liq} ({pct(no_change_with_liq)})"
         )
+        delays = [
+            ("1h", s.get("delayed_liquidations_1h", 0)),
+            ("6h", s.get("delayed_liquidations_6h", 0)),
+            ("12h", s.get("delayed_liquidations_12h", 0)),
+            ("24h", s.get("delayed_liquidations_24h", 0)),
+            ("3d", s.get("delayed_liquidations_3d", 0)),
+            ("7d", s.get("delayed_liquidations_7d", 0)),
+            ("31d", s.get("delayed_liquidations_31d", 0)),
+            ("180d", s.get("delayed_liquidations_180d", 0)),
+            ("365d", s.get("delayed_liquidations_365d", 0)),
+        ]
+        for label, count in delays:
+            if count > 0:
+                logger.info(f"    - Delayed > {label}:                {count} ({pct(count)})")
         logger.info(
             f"  - Neither liquidated:             {no_change_without_liq} ({pct(no_change_without_liq)})"
         )
@@ -1587,6 +1616,24 @@ def process_recommendation(item):
                 delta = float(t_with) - float(t_without)
                 for bucket in stat_buckets:
                     bucket["time_deltas"].append(delta)
+                    if delta >= 3600:
+                        bucket["delayed_liquidations_1h"] += 1
+                    if delta >= 21600:
+                        bucket["delayed_liquidations_6h"] += 1
+                    if delta >= 43200:
+                        bucket["delayed_liquidations_12h"] += 1
+                    if delta >= 86400:
+                        bucket["delayed_liquidations_24h"] += 1
+                    if delta >= 259200:
+                        bucket["delayed_liquidations_3d"] += 1
+                    if delta >= 604800:
+                        bucket["delayed_liquidations_7d"] += 1
+                    if delta >= 2678400:
+                        bucket["delayed_liquidations_31d"] += 1
+                    if delta >= 15552000:
+                        bucket["delayed_liquidations_180d"] += 1
+                    if delta >= 31536000:
+                        bucket["delayed_liquidations_365d"] += 1
             except Exception:
                 pass
 
@@ -1598,10 +1645,23 @@ def process_recommendation(item):
         if not (is_dust_without or is_dust_with):
             stats_updates_no_dust = copy.deepcopy(stats_updates)
 
+        stats_updates_hf_only = {}
+        exclude_from_hf_only = False
+        if lw:
+            if is_dust_without or is_threshold_without or not is_hf_without:
+                exclude_from_hf_only = True
+        if lw_with:
+            if is_dust_with or is_threshold_with or not is_hf_with:
+                exclude_from_hf_only = True
+
+        if not exclude_from_hf_only:
+            stats_updates_hf_only = copy.deepcopy(stats_updates)
+
         return {
             "success": True,
             "stats_updates": stats_updates,
             "stats_updates_no_dust": stats_updates_no_dust,
+            "stats_updates_hf_only": stats_updates_hf_only,
             "user": user,
         }
 
@@ -1689,6 +1749,12 @@ if __name__ == "__main__":
                                     stats_no_dust, stats_updates_no_dust
                                 )
 
+                            stats_updates_hf_only = result.get(
+                                "stats_updates_hf_only", {}
+                            )
+                            if stats_updates_hf_only:
+                                merge_stats_updates(stats_hf_only, stats_updates_hf_only)
+
                         # Progress logging (optimized: compute elapsed once, reduce logging frequency)
                         if processed_count % 100 == 0:
                             elapsed = time.time() - start_time
@@ -1754,6 +1820,10 @@ if __name__ == "__main__":
                         if stats_updates_no_dust:
                             merge_stats_updates(stats_no_dust, stats_updates_no_dust)
 
+                        stats_updates_hf_only = result.get("stats_updates_hf_only", {})
+                        if stats_updates_hf_only:
+                            merge_stats_updates(stats_hf_only, stats_updates_hf_only)
+
                     if processed_count % 100 == 0:
                         elapsed = time.time() - start_time
                         rate = processed_count / elapsed if elapsed > 0 else 0
@@ -1795,6 +1865,7 @@ if __name__ == "__main__":
             # Save statistics to JSON file
             save_statistics_to_json(stats)
             save_statistics_to_json(stats_no_dust, suffix="no_dust")
+            save_statistics_to_json(stats_hf_only, suffix="hf_only")
 
     except KeyboardInterrupt:
         logger.warning("Processing interrupted by user")
@@ -1802,6 +1873,7 @@ if __name__ == "__main__":
         try:
             save_statistics_to_json(stats, suffix="INTERRUPTED")
             save_statistics_to_json(stats_no_dust, suffix="no_dust_INTERRUPTED")
+            save_statistics_to_json(stats_hf_only, suffix="hf_only_INTERRUPTED")
         except Exception as save_error:
             logger.error(f"Failed to save statistics after interruption: {save_error}")
     except Exception as e:
@@ -1810,6 +1882,7 @@ if __name__ == "__main__":
         try:
             save_statistics_to_json(stats, suffix="ERROR")
             save_statistics_to_json(stats_no_dust, suffix="no_dust_ERROR")
+            save_statistics_to_json(stats_hf_only, suffix="hf_only_ERROR")
         except Exception:
             pass
         raise

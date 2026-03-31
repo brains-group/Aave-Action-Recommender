@@ -370,6 +370,15 @@ def build_stats_from_results(results):
             "no_change_with_liquidation": 0,
             "no_change_without_liquidation": 0,
             "time_deltas": [],
+            "delayed_liquidations_1h": 0,
+            "delayed_liquidations_6h": 0,
+            "delayed_liquidations_12h": 0,
+            "delayed_liquidations_24h": 0,
+            "delayed_liquidations_3d": 0,
+            "delayed_liquidations_7d": 0,
+            "delayed_liquidations_31d": 0,
+            "delayed_liquidations_180d": 0,
+            "delayed_liquidations_365d": 0,
             "liquidation_reasons_without": [],
             "liquidation_reasons_with": [],
             "dust_liquidations_without": 0,
@@ -441,7 +450,26 @@ def build_stats_from_results(results):
         t_with = r['liquidation_stats_with'].get('time_to_liquidation')
         if t_without is not None and t_with is not None:
             try:
-                overall["time_deltas"].append(float(t_with) - float(t_without))
+                delta = float(t_with) - float(t_without)
+                overall["time_deltas"].append(delta)
+                if delta >= 3600:
+                    overall["delayed_liquidations_1h"] += 1
+                if delta >= 21600:
+                    overall["delayed_liquidations_6h"] += 1
+                if delta >= 43200:
+                    overall["delayed_liquidations_12h"] += 1
+                if delta >= 86400:
+                    overall["delayed_liquidations_24h"] += 1
+                if delta >= 259200:
+                    overall["delayed_liquidations_3d"] += 1
+                if delta >= 604800:
+                    overall["delayed_liquidations_7d"] += 1
+                if delta >= 2678400:
+                    overall["delayed_liquidations_31d"] += 1
+                if delta >= 15552000:
+                    overall["delayed_liquidations_180d"] += 1
+                if delta >= 31536000:
+                    overall["delayed_liquidations_365d"] += 1
             except:
                 pass
 

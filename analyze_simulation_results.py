@@ -59,6 +59,15 @@ def print_summary_table(stats, title="Summary"):
         ("Worsened (introduced liquidation)", "worsened"),
         ("No change", "no_change"),
         ("  - Both liquidated", "no_change_with_liquidation"),
+        ("    - Delayed > 1h", "delayed_liquidations_1h"),
+        ("    - Delayed > 6h", "delayed_liquidations_6h"),
+        ("    - Delayed > 12h", "delayed_liquidations_12h"),
+        ("    - Delayed > 24h", "delayed_liquidations_24h"),
+        ("    - Delayed > 3d", "delayed_liquidations_3d"),
+        ("    - Delayed > 7d", "delayed_liquidations_7d"),
+        ("    - Delayed > 31d", "delayed_liquidations_31d"),
+        ("    - Delayed > 180d", "delayed_liquidations_180d"),
+        ("    - Delayed > 365d", "delayed_liquidations_365d"),
         ("  - Neither liquidated", "no_change_without_liquidation"),
     ]
     
