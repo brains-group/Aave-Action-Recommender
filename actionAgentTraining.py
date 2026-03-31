@@ -254,7 +254,9 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
     return results
 
 
-def calculate_trend_slope(data):
+def calculate_trend_slope(
+    data, acceleration_coeff=0.8, volatility_coeff=0.6, momentum_coeff=0.3
+):
     """
     Calculates the linear regression slope of a dataset to determine the trend.
 
@@ -355,15 +357,19 @@ def calculate_trend_slope(data):
     # Combine into a single score: base normalized slope, boosted by
     # recent acceleration, penalized by volatility. We also slightly
     # amplify when the last value is above the mean (momentum).
-    score = slope_z + 0.8 * acceleration_z - 0.6 * volatility_norm
+    score = (
+        slope_z + acceleration_coeff * acceleration_z - volatility_coeff * volatility_norm
+    )
 
     last_rel = (ys[-1] - mean_y) / (abs(mean_y) + eps)
-    score = score * (1.0 + 0.3 * last_rel)
+    score = score * (1.0 + momentum_coeff * last_rel)
 
     return float(score)
 
 
-def determine_liquidation_risk(row: pd.Series):
+def determine_liquidation_risk(
+    row: pd.Series, acceleration_coeff=0.8, volatility_coeff=0.6, momentum_coeff=0.3
+):
     predict_transaction_history = {
         key: value
         for key, value in get_transaction_history_predictions(row).items()
@@ -395,7 +401,10 @@ def determine_liquidation_risk(row: pd.Series):
                     timestamp: preds[outcome_event]
                     for timestamp, preds in predict_transaction_history.items()
                     if preds and outcome_event in preds
-                }
+                },
+                acceleration_coeff=acceleration_coeff,
+                volatility_coeff=volatility_coeff,
+                momentum_coeff=momentum_coeff,
             )
             for outcome_event in predict_transaction_history[
                 sorted(predict_transaction_history.keys(), reverse=True)[0]
