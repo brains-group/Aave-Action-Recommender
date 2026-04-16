@@ -19,9 +19,14 @@ For detailed information on working with the submodule, including cloning, updat
 ## Attribution
 
 If you use the code in this repository, please cite the following corresponding paper:
-@inproceedings{spadea2026from,\\
-author = {Spadea, Fernando and Seneviratne, Oshani},\\
-title = {{From Risk to Rescue: An Agentic Survival Analysis Framework for Liquidation Prevention}},\\
-year = {2026},\\
-booktitle = {{IEEE International Conference on Blockchain and Cryptocurrency}},\\
+@inproceedings{spadea2026from,
+
+author = {Spadea, Fernando and Seneviratne, Oshani},
+
+title = {{From Risk to Rescue: An Agentic Survival Analysis Framework for Liquidation Prevention}},
+
+year = {2026},
+
+booktitle = {{IEEE International Conference on Blockchain and Cryptocurrency}},
+
 }
