@@ -30,3 +30,17 @@ Simulation fixes write under `cache/simulation_results/revision_20260908/<input-
 old analysis scripts that scan only the directory top level will not discover these new
 runs automatically. Use explicit cohort/config manifests with the new checkpoint evaluation
 interface before interpreting a new policy result. Old paper results remain untouched.
+
+## Shared output and supplementary downloads
+
+Both consumers now export to `/home/spadef/data/craft-soc/data` and collect into its
+hidden `.cache` directory. The legacy craft-soc collection path is a compatibility
+symlink; model caches remain separate. New supplementary CSVs and coverage manifests
+live under the output folder's `supplementary/aave_v3/polygon/<deployment>/`.
+
+`python collect_aave.py --market polygon --include-supplementary` opts into supported
+extra events/history. Add the existing free-access confirmation and bounded request
+budget only after verifying the account's remaining free allowance.
+Use `--supplementary-only` to avoid refreshing core events/account snapshots.
+Unavailable sources are explicit in coverage.json. Schema support does not establish
+complete chain history. See Aave-Data-Pipeline/README.md for the complete commands.

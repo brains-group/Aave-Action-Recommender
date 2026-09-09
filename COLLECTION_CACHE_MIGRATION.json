@@ -1,0 +1,57 @@
+{
+  "date": "2026-09-09",
+  "old_path": "/home/spadef/craft-soc/codes/cache/data_collection",
+  "new_path": "/home/spadef/data/craft-soc/data/.cache/data_collection",
+  "legacy_path_is_symlink": true,
+  "files": [
+    {
+      "path": "aave_v3/avalanche/e39221a8c23d03c5/raw.sqlite3",
+      "bytes": 764813312,
+      "sha256": "56e1acef12b3ad804b7b3a713d30c3dbbd87fc18cf4982bae08fe75845493b6d"
+    },
+    {
+      "path": "aave_v3/polygon/5a19507ddc6a0f4b/accounts.csv",
+      "bytes": 169930903,
+      "sha256": "822a61b7bcccdef5561ba848453888ac0f749eabf6f28cafab62aa1c005ca39a"
+    },
+    {
+      "path": "aave_v3/polygon/5a19507ddc6a0f4b/borrows.csv",
+      "bytes": 1289392231,
+      "sha256": "dccff3d29749d927473d91da02355073a695c742a43ae7fbdcdf3cf2f9543a27"
+    },
+    {
+      "path": "aave_v3/polygon/5a19507ddc6a0f4b/deposits.csv",
+      "bytes": 3228485718,
+      "sha256": "13b2ad2c00a8f8ed9eff4f73f2e7b65ebef3e53159c4708445117c1a528f77b0"
+    },
+    {
+      "path": "aave_v3/polygon/5a19507ddc6a0f4b/liquidates.csv",
+      "bytes": 46010446,
+      "sha256": "cddc4e87fe5d32a33630f49d3c1b590cdc5dd19128bc1f983e46f5910623a19e"
+    },
+    {
+      "path": "aave_v3/polygon/5a19507ddc6a0f4b/raw.sqlite3",
+      "bytes": 11765379072,
+      "sha256": "aaec1d8fb4ab20251a59f9ce616221a5c08de3b3ab9d270d3e4413db9ea93b86"
+    },
+    {
+      "path": "aave_v3/polygon/5a19507ddc6a0f4b/repays.csv",
+      "bytes": 1208832574,
+      "sha256": "ba27f32efbe680a0a18014950331124f2545798a790d489ab99759158dadd4c1"
+    },
+    {
+      "path": "aave_v3/polygon/5a19507ddc6a0f4b/tokens.csv",
+      "bytes": 17970,
+      "sha256": "3dd3d4411d817b0a3898f685af5205318b9232e46569199402ea15144e4fa649"
+    },
+    {
+      "path": "aave_v3/polygon/5a19507ddc6a0f4b/withdraws.csv",
+      "bytes": 3121695446,
+      "sha256": "33470cb32be1943fc0f1810fbf7978554afaeb07f9e21fb08c9959fb86e064e3"
+    }
+  ],
+  "sqlite_quick_check": "ok",
+  "authenticated_schema_requests": 1,
+  "active_collectors_at_migration": 0,
+  "pipeline_revision": "8143c0bad8ebe16af7b74a8f7f2c0351723d0ca4"
+}
