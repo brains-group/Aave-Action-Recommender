@@ -3,8 +3,18 @@ import json
 
 seed = 42
 
-DATA_PATH = "./data/"
+DATA_PATH = os.environ.get("AAVE_SURVIVAL_DATA", "./data/")
 CACHE_DIR = "./cache/"
+if os.environ.get("AAVE_SURVIVAL_DATA"):
+    import hashlib
+    from pathlib import Path
+    source = Path(DATA_PATH).resolve()
+    manifest = source / "manifest.json"
+    if not manifest.is_file():
+        raise ValueError("AAVE_SURVIVAL_DATA requires a pipeline manifest.json")
+    identity = hashlib.sha256(str(source).encode()+manifest.read_bytes()).hexdigest()[:16]
+    CACHE_DIR = str(Path(CACHE_DIR) / "survival" / identity)
+
 os.makedirs(CACHE_DIR, exist_ok=True)
 MODEL_CACHE_DIR = os.path.join(CACHE_DIR, "models")
 os.makedirs(MODEL_CACHE_DIR, exist_ok=True)

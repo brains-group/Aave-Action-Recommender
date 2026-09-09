@@ -42,7 +42,7 @@ def get_event_df(index_event: str, outcome_event: str) -> Optional[pd.DataFrame]
         if isinstance(current_val, str) and current_val == loading_token:
             try:
                 logger.info(f"Loading event dataframe for ({index_event}, {outcome_event})...")
-                event_path = os.path.join(DATA_PATH, index_event, outcome_event, "data.csv")
+                event_path = os.path.join(os.environ.get("AAVE_SURVIVAL_DATA", DATA_PATH), index_event, outcome_event, "data.csv")
                 if not os.path.exists(event_path):
                     EVENT_DF_CACHE[key] = None
                     return None

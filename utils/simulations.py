@@ -28,7 +28,11 @@ from simulator.utils import get_price_history
 def get_simulation_outcome(recommendation, suffix, **passed_args):
     """Load cached simulation results or compute and cache them."""
     key = f"{recommendation['user']}_{int(recommendation.get('timestamp', 0))}_{suffix}"
-    results_cache_file = Path(SIMULATION_RESULTS_CACHE_DIR) / f"{key}.pkl"
+    # New logic/configuration must not consume paper-era simulation caches.
+    import hashlib
+    canonical = pkl.dumps({k:v for k,v in passed_args.items() if k != "output_file"}, protocol=4)
+    fingerprint = hashlib.sha256(canonical).hexdigest()[:16]
+    results_cache_file = Path(SIMULATION_RESULTS_CACHE_DIR) / "revision_20260908" / fingerprint / f"{key}.pkl"
     # logger.debug("Checkpoint 7.6")
 
     # Try to load from cache
@@ -46,7 +50,7 @@ def get_simulation_outcome(recommendation, suffix, **passed_args):
 
     # Save to cache (best effort)
     try:
-        Path(SIMULATION_RESULTS_CACHE_DIR).mkdir(parents=True, exist_ok=True)
+        results_cache_file.parent.mkdir(parents=True, exist_ok=True)
         with open(results_cache_file, "wb") as f:
             pkl.dump(results, f)
     except Exception as e:
@@ -85,51 +89,25 @@ def would_create_dust_position(recommendation, results_without_recommendation):
 
 
 def update_recommendation_if_necessary(recommendation, results_without_recommendation):
-    if recommendation["Index Event"] != "repay":
-        return recommendation
+    """Bound repayment to same-asset funds/debt in the pre-projection checkpoint.
 
-    # Get symbol from recommendation - try 'symbol' first, then 'reserve' as fallback
-    symbol = recommendation.get("symbol") or recommendation.get("reserve")
-    if not symbol:
-        logger.warning(
-            f"Recommendation missing 'symbol' and 'reserve' fields for repay action. "
-            f"Available keys: {list(recommendation.keys())}. Skipping update."
-        )
+    No conversion, wallet sweep, future-state funding, or automatic dust upsizing.
+    Inferred initial wallets remain an explicit retrospective assumption.
+    """
+    if str(recommendation["Index Event"]).lower() != "repay":
         return recommendation
-
-    # walletSymbolAmount = wallet_balances.get(symbol, 0)
-    # if walletSymbolAmount < recommendation['amount']:
-    #     updateAmountOrUSD(recommendation, amount = walletSymbolAmount)
-    total_debt_usd = results_without_recommendation["final_state"]["total_debt_usd"]
-    amount_usd = recommendation["amountUSD"]
-    estimated_remaining_debt = max(0, total_debt_usd - amount_usd)
-    # if not (
-    #     estimated_remaining_debt > 0
-    #     and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD
-    # ):
-    #     return recommendation
-    # elif (
-    #     recommendation["Index Event"] != "repay"
-    # ):  # Comment out these if and return statements for potential performance increase for deposit recommendations
-    #     return None
-    if recommendation["Index Event"] != "repay" and (
-        estimated_remaining_debt > 0
-        and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD
-    ):  # Comment out these if and return statements for potential performance increase for deposit recommendations
+    state = results_without_recommendation.get("checkpoint_state")
+    if state is None or state["timestamp"] > recommendation["timestamp"]:
+        logger.warning("Repayment requires an available pre-recommendation checkpoint state")
         return None
-
-    wallet_balances = results_without_recommendation["final_state"]["wallet_balances"]
-    maxWalletSymbol = max(wallet_balances, key=wallet_balances.get)
-    maxWalletValue = wallet_balances.get(maxWalletSymbol, 0)
-
-    recommendation["symbol"] = recommendation["reserve"] = maxWalletSymbol
-    updateAmountOrUSD(recommendation, amount=maxWalletValue)
-
-    # updateAmountOrUSD(recommendation, amountUSD = total_debt_usd*1.01)
-
-    # if walletSymbolAmount < recommendation['amount']:
-    #     updateAmountOrUSD(recommendation, amount = walletSymbolAmount)
-
+    symbol = recommendation.get("symbol") or recommendation.get("reserve")
+    amount = min(float(recommendation["amount"]),
+                 state["wallet_balances"].get(symbol, 0),
+                 state["debt_balances"].get(symbol, 0))
+    if not np.isfinite(amount) or amount <= 0:
+        return None
+    recommendation = recommendation.copy()
+    updateAmountOrUSD(recommendation, amount=amount)
     return recommendation
 
 

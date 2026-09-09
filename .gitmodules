@@ -1,3 +1,6 @@
 [submodule "Aave-Simulator"]
 	path = Aave-Simulator
 	url = https://github.com/brains-group/aave-simulator.git
+[submodule "Aave-Data-Pipeline"]
+	path = Aave-Data-Pipeline
+	url = /home/spadef/Aave-Data-Pipeline

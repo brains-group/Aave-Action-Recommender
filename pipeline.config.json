@@ -1,0 +1,7 @@
+{
+  "CACHE_DIR": "../craft-soc/codes/cache",
+  "LOG_DIR": "./log",
+  "TRANSACTIONS_PATH": "./pipeline-output",
+  "USERS_PATH": "./pipeline-output",
+  "AAVE_MARKET": "polygon"
+}

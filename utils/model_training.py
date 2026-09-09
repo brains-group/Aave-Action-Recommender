@@ -42,6 +42,9 @@ def preprocess(
     target_columns = [LABEL_TIME, LABEL_EVENT]
     cols_to_drop = target_columns + [
         "id",
+        "observation_id",
+        "outcome_id",
+        "split",
         "user",
         "pool",
         "Index Event",
