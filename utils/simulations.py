@@ -25,6 +25,23 @@ from tools.run_single_simulation import run_simulation
 from simulator.utils import get_price_history
 
 
+from functools import lru_cache
+@lru_cache(maxsize=1)
+def simulation_code_identity():
+    import hashlib
+    root = Path(aave_sim_path).resolve()
+    digest = hashlib.sha256()
+    for directory in ['simulator', 'tools', 'analysis', 'market']:
+        for source in sorted((root / directory).rglob('*.py')):
+            digest.update(str(source.relative_to(root)).encode()); digest.update(source.read_bytes())
+    for source in sorted(Path(__file__).parent.glob("*.py")):
+        digest.update(source.name.encode()); digest.update(source.read_bytes())
+    price = root / 'data/reserves/price_history.json'
+    with price.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024*1024), b''): digest.update(chunk)
+    return 'code_' + digest.hexdigest()[:20]
+
+
 def get_simulation_outcome(recommendation, suffix, **passed_args):
     """Load cached simulation results or compute and cache them."""
     key = f"{recommendation['user']}_{int(recommendation.get('timestamp', 0))}_{suffix}"
@@ -32,7 +49,7 @@ def get_simulation_outcome(recommendation, suffix, **passed_args):
     import hashlib
     canonical = pkl.dumps({k:v for k,v in passed_args.items() if k != "output_file"}, protocol=4)
     fingerprint = hashlib.sha256(canonical).hexdigest()[:16]
-    results_cache_file = Path(SIMULATION_RESULTS_CACHE_DIR) / "revision_20260908" / fingerprint / f"{key}.pkl"
+    results_cache_file = Path(SIMULATION_RESULTS_CACHE_DIR) / simulation_code_identity() / fingerprint / f"{key}.pkl"
     # logger.debug("Checkpoint 7.6")
 
     # Try to load from cache
@@ -146,6 +163,9 @@ def get_limited_user_profile(recommendation, return_extras=False):
     # For "without recommendation" simulation: use only historical transactions
     # (No need to copy - we'll create a deepcopy later for "with" profile)
     user_profile["transactions"] = historical_transactions
+
+    from utils.indexed_checkpoint import attach_checkpoint
+    attach_checkpoint(user_profile)
 
     if return_extras:
         if future_transactions:

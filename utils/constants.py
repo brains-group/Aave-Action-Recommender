@@ -4,7 +4,7 @@ import json
 seed = 42
 
 DATA_PATH = os.environ.get("AAVE_SURVIVAL_DATA", "./data/")
-CACHE_DIR = "./cache/"
+CACHE_DIR = os.environ.get("AAVE_EVALUATION_CACHE", "./cache/")
 if os.environ.get("AAVE_SURVIVAL_DATA"):
     import hashlib
     from pathlib import Path
@@ -35,7 +35,7 @@ MIN_RECOMMENDATION_DEBT_USD = 1.0  # Minimum debt to avoid dust liquidation
 MIN_RECOMMENDATION_COLLATERAL_USD = 10.0  # Minimum collateral to avoid dust liquidation
 MIN_RECOMMENDATION_AMOUNT = 50.0  # Minimum recommended amount (USD equivalent) to prevent creating tiny positions
 
-RECOMMENDATIONS_FILE = os.path.join(CACHE_DIR, "recommendations.pkl")
+RECOMMENDATIONS_FILE = os.environ.get("AAVE_RECOMMENDATIONS_FILE", os.path.join(CACHE_DIR, "recommendations.pkl"))
 
 PROFILES_DIR = "./profiles/"
 
