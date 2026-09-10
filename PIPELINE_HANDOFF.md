@@ -1,3 +1,5 @@
+Latest: [expanded validation](EXPANDED_VALIDATION.md), 198 accounts / 247 liquidations. Comparable testing completed from available data; old run artifacts are not a blocker.
+
 Latest audit: [paper validation reproduction](PAPER_VALIDATION_REPRODUCTION.md). Legacy method reproduced on matched diagnostic cohort; duplicate metric entries fixed. Full paper run awaits original artifacts.
 
 > 2026-09-10 update: supplementary download completed; shared cache is under the output folder’s `.cache`. See [SIMULATOR_ENRICHMENT.md](SIMULATOR_ENRICHMENT.md) for the matched data ablations, state improvements, additional warnings, source limitations, and runnable commands. Original study/manuscript results remain unchanged.
