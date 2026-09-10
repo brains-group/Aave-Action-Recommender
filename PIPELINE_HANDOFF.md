@@ -1,3 +1,5 @@
+> 2026-09-10 update: supplementary download completed; shared cache is under the output folder’s `.cache`. See [SIMULATOR_ENRICHMENT.md](SIMULATOR_ENRICHMENT.md) for the matched data ablations, state improvements, additional warnings, source limitations, and runnable commands. Original study/manuscript results remain unchanged.
+
 # Shared Aave pipeline and simulator revision work
 
 Status: implemented local integration and targeted fixes; bounded offline diagnostic complete.
