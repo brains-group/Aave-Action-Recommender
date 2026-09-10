@@ -1,0 +1,10 @@
+build/
+revision-build/
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.loc
+*.soc
+*.synctex.gz

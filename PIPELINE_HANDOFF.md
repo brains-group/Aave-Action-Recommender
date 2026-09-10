@@ -1,3 +1,5 @@
+Latest manuscript work: [reviewer plan](REVIEWER_REVISION_PLAN.md), [tracked correction/build guide](ACM_DLT_Journal_DeFi_Lending_Recommendations/REVISION_TRACKING.md). Clean and marked PDFs verified; simulation job continues unchanged. Untouched local manuscript baseline: /home/spadef/data/craft-soc/data/manuscript-revisions/20260910/.
+
 Latest: [full paired recommendation rerun](PAIRED_RERUN.md). 12,000 recommendations, current-core and indexed-checkpoint variants, fresh caches; results pending completion.
 
 Latest: [expanded validation](EXPANDED_VALIDATION.md), 198 accounts / 247 liquidations. Comparable testing completed from available data; old run artifacts are not a blocker.

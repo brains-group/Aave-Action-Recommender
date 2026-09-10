@@ -1,0 +1,38 @@
+{
+  "engine": {
+    "tag": "tectonic@0.17.0",
+    "url": "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.17.0/tectonic-0.17.0-x86_64-unknown-linux-musl.tar.gz",
+    "sha256": "8533d07f9ccbd7a65824b9e0459041bca34af1eb33daba48f59215593753a3b7"
+  },
+  "baseline_sha256": "3bc590088a5bcd7f6fa1e2082e9bc9438bbdb621e44e95f4797a95f73343cc8a",
+  "revised_sha256": "b02970e71a3c753d04e3e45bc21bf4dbb93de8e4b287552ff726501b14ca9863",
+  "checks": {
+    "clean": {
+      "compile_success": true,
+      "label": "5.3",
+      "label_definitions": 1,
+      "undefined_references_or_citations": false,
+      "change_note_visible": false,
+      "pdf_sha256": "2cf0d257124cd7ba3c77779d6cd719cb20c642fa8b1448cca99043c302db40a8",
+      "layout_warnings_retained": {
+        "overfull": 13,
+        "underfull": 7
+      },
+      "font_substitution_warning": true
+    },
+    "marked": {
+      "compile_success": true,
+      "label": "5.3",
+      "label_definitions": 1,
+      "undefined_references_or_citations": false,
+      "change_note_visible": true,
+      "pdf_sha256": "e8ef0fd46a2967026cd0460449d2023a4f468dbc1df329a28a00e32a8eaa981a",
+      "layout_warnings_retained": {
+        "overfull": 13,
+        "underfull": 7
+      },
+      "font_substitution_warning": true
+    }
+  },
+  "visual_check": "Marked PDF page 14: removed Section 5.3 visibly struck through; replacement footnote legible; corrected heading label resolves in both editions."
+}

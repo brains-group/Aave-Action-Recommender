@@ -1,0 +1,33 @@
+--- paper.tex (already author-corrected baseline)
++++ paper.tex (tracked revision)
+@@ -1,4 +1,6 @@
+ % CFP: https://dl.acm.org/pb-assets/static_journal_pages/dlt/pdf/ACM-DLT-SI-Emerging-Technology-Blockchain-Research-1756234160337.pdf
++% REV-INFRA-002: acmart loads xcolor; supply table options before the class.
++\PassOptionsToPackage{table}{xcolor}
+ \documentclass[manuscript,screen,review]{acmart}
+ %%
+ %% \BibTeX command to typeset BibTeX logo in the docs
+@@ -88,7 +90,12 @@
+ \usepackage[most]{tcolorbox}
+ \usepackage{cleveref} % Load this last (usually)
+ 
+-\usepackage[final,commandnameprefix=ifneeded]{changes}
++% REV-INFRA-001: paper.tex is clean; paper-marked.tex enables visible changes.
++\ifdefined\ShowChanges
++  \usepackage[draft,commandnameprefix=ifneeded,commentmarkup=footnote]{changes}
++\else
++  \usepackage[final,commandnameprefix=ifneeded,commentmarkup=footnote]{changes}
++\fi
+ % \usepackage[draft,commandnameprefix=ifneeded]{changes} % final;draft
+ % \definechangesauthor[name={Kaiyang}, color=red]{}
+ \colorlet{track-changes-color}{blue} %for track changes
+@@ -559,6 +566,9 @@
+ 
+ \subsection{Evaluation Methodology: Replay-Based Validation}
+ \label{sec:experimental_validation}
++% R1-P1: the author already corrected this source command before this revision pass.
++% Keep the live label outside change markup to avoid duplicate label writes.
++\deleted[comment={R1-P1: Replaced the accidental \texttt{\string\Cref} command with \texttt{\string\label} for this subsection, fixing the unresolved cross-reference.}]{\mbox{\Cref{sec:experimental_validation}}}
+ To rigorously assess the agent's effectiveness, we employ a replay-based validation strategy that splits user profiles into ``historical'' (used for training/prediction) and ``future'' (used for validation) segments.
+ 
+ \subsubsection{Replay Framework}
