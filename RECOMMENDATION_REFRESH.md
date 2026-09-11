@@ -50,3 +50,14 @@ share only this run's code- and input-keyed simulation cache, avoiding duplicate
 baseline computation. None of the old simulation caches is selected.
 Exact launch arguments are saved in `prepare-receipt.json`; remove `--prepare-only`
 and append `--evaluate` to resume the chain manually. Keep the same code/inputs.
+
+## Historical training input check
+
+An offline join by unique core event ID through 2024-12-01 15:33:51.8 UTC (the
+last fitted-model date selected by these checkpoints) found 7,030,448 common rows,
+zero missing old rows, and 1,815 additional refreshed-source rows. Type, timestamp,
+account/liquidatee, pool, reserve, amount and USD amount matched on all common rows
+(numerical tolerance rtol=atol=1e-10). This establishes raw-field agreement only,
+not whole-pipeline feature/label parity. Additional rows can change engineered
+market/account features; the fixed-model comparison must not be called a fully
+retrained updated-data study. Full evidence is saved with the run's training inputs.

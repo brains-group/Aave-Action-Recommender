@@ -200,8 +200,15 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
 
     model_date = dates[dates <= pd.to_datetime(row["timestamp"], unit="s")].max()
 
+    # Only the unchanged historical prefix may be reused across candidate actions.
+    history_key = hashlib.sha256(pkl.dumps((row["user"], row["timestamp"], str(model_date)), protocol=4)).hexdigest()
+    history_cache_file = os.path.join(RESULTS_CACHE_DIR, "history_" + history_key + ".pkl")
+    if os.path.exists(history_cache_file):
+        with open(history_cache_file, "rb") as f:
+            cached_results = pkl.load(f)
     if cached_results is not None:
         results = cached_results
+        results[int(row["timestamp"])] = {}
         calc_predictions(
             row["Index Event"],
             user_history.iloc[[-1]],
@@ -228,6 +235,10 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
             calc_predictions(
                 index_event_value, group, results, model_date, user_history
             )
+
+    if cached_results is None:
+        with open(history_cache_file, "wb") as f:
+            pkl.dump({ts:values for ts,values in results.items() if ts != int(row["timestamp"])}, f)
 
     with open(
         results_cache_file,

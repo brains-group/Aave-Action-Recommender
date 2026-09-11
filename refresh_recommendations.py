@@ -127,6 +127,17 @@ def generate(a):
     records=[pickle.load(open(RUN/'generated'/f'{i:05d}.pkl','rb')) for i in range(n)]
     atomic(RUN/'recommendations.pkl',{str(i):r['result'] for i,r in enumerate(records)})
     summary={'selected':n,'errors':sum(bool(r['error']) for r in records),'abstentions':sum(bool(r['result'][1].get('abstention_reason')) for r in records),'seconds':time.time()-start}
+    import math
+    previous=list(pickle.load(open(RUN/'inputs/old-recommendations.pkl','rb')).values())
+    changes={'action_type':0,'asset':0,'amount':0,'risk_flag':0}
+    for i,record in enumerate(records):
+        if record['error']:continue
+        now,info=record['result'];old,oldinfo=previous[i]
+        changes['action_type']+=str(now['Index Event']).lower()!=str(old['Index Event']).lower()
+        changes['asset']+=now['reserve']!=old['reserve']
+        changes['amount']+=not math.isclose(float(now['amount']),float(old['amount']),rel_tol=1e-10,abs_tol=1e-12)
+        changes['risk_flag']+=bool(info.get('is_at_risk'))!=bool(oldinfo.get('is_at_risk'))
+    summary['changes_from_previous_recommendations']=changes
     (RUN/'generation-complete.json').write_text(json.dumps(summary,indent=2));print(summary,flush=True)
 
 def main():
