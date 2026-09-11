@@ -111,3 +111,9 @@ path to reuse the downloaded packages. These session paths are not a portable de
 a standard complete TeX installation or Overleaf can compile the same sources.
 Both editions have no undefined references/citations. Existing overfull/underfull boxes,
 font-substitution and image-description warnings remain for the presentation workstream.
+
+## Local storage
+
+Manuscript revision baselines are stored in `../.manuscript-revisions/` within the
+project, with owner-only permissions and a local Git exclusion. Do not place manuscript
+baselines, drafts, or revision artifacts in the shared/public research-data folder.
