@@ -1,0 +1,59 @@
+{
+  "close_factor": {
+    "hf": 0.98,
+    "debt_before": 86.73469387755102,
+    "v30_to_v32_max_debt": 43.36734693877551,
+    "simulator_repaid": 80
+  },
+  "zero_debt_dust": [
+    true,
+    {
+      "is_dust": true,
+      "reasons": [
+        "total_debt_usd (0.000000) < $1.00"
+      ],
+      "total_debt_usd": 0,
+      "total_collateral_usd": 100,
+      "estimated_debt_to_cover_usd": null,
+      "debt_to_cover_ratio": null
+    }
+  ],
+  "healthy_low_threshold": {
+    "hf": 6.0,
+    "warning": [
+      true,
+      {
+        "is_at_risk": true,
+        "effective_threshold": 0.6,
+        "risk_level": "high",
+        "reason": "Very low effective threshold (0.6000 < 0.70)"
+      }
+    ]
+  },
+  "unknown_action_success": true,
+  "stale_snapshot": {
+    "balance_after_30_days": "100",
+    "age_seconds": 2592000,
+    "note": "No intervening index/interest update; this is stale last-observed balance, not exact current debt."
+  },
+  "future_price_lookup": {
+    "query_timestamp": 150,
+    "expected_asof_price": 1.0,
+    "returned": {
+      "USD": 2.0
+    }
+  },
+  "hf_query_mutation": {
+    "before": {
+      "supply": 10000,
+      "debt": 1000,
+      "index": 1.0
+    },
+    "after": {
+      "supply": 10000.82191780822,
+      "debt": 1000.8219178082192,
+      "index": 1.0
+    }
+  },
+  "negative_liquidation_time": -3544
+}

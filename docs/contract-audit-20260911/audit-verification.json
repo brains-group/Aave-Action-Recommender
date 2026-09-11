@@ -1,0 +1,6 @@
+{
+  "simulator_sources_unchanged": true,
+  "simulator_revision": "2daaa1d80e233af5d7ea6b999c63d3cab2e462f6",
+  "supplementary_coverage_sha256": "26c15c1f3f2bf27cbee0b74453742173b638c62f52416b3deaeecf63ad62fd16",
+  "scope": "Documentation and isolated probes only; active job, simulator, configs and caches unchanged"
+}

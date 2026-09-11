@@ -1,0 +1,157 @@
+[
+  {
+    "url": "https://api.github.com/repos/aave/aave-v3-core/git/trees/master?recursive=1",
+    "file": "core-tree.json",
+    "sha256": "30b6cb9298bcc4b263458913d2c4d50b67d85f7b1edc77a53e815c5487cfe584"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave/aave-v3-core/782f51917056a53a2c228701058a6c3fb233684a/contracts/protocol/libraries/logic/ValidationLogic.sol",
+    "file": "core-ValidationLogic.sol",
+    "sha256": "5d5f7a76a4e03b258679792885c068e2974293679d7baea09c0b7d6de0c2d329"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave/aave-v3-core/782f51917056a53a2c228701058a6c3fb233684a/contracts/protocol/libraries/logic/LiquidationLogic.sol",
+    "file": "core-LiquidationLogic.sol",
+    "sha256": "4fecfabd4ebbeccba176f41b3417dd5b3f16d65100d9e9cd373b7ed0dec51d5a"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave/aave-v3-core/782f51917056a53a2c228701058a6c3fb233684a/contracts/protocol/libraries/logic/GenericLogic.sol",
+    "file": "core-GenericLogic.sol",
+    "sha256": "6a5dbf307801b001ae5cd450c7bc6a7c77947b50f4bc29bdb93661ed22ea795b"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave/aave-v3-core/782f51917056a53a2c228701058a6c3fb233684a/contracts/protocol/libraries/logic/ReserveLogic.sol",
+    "file": "core-ReserveLogic.sol",
+    "sha256": "6b827ea494fa5bb1b38fa9e7db973bd0aed0ee3d53677cac950f6614cb8fd0c9"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave/aave-v3-core/782f51917056a53a2c228701058a6c3fb233684a/contracts/protocol/libraries/logic/FlashLoanLogic.sol",
+    "file": "core-FlashLoanLogic.sol",
+    "sha256": "8a581385ba398698b769e333d093410198d95ccbd5d22fafacbb90093f6d5f6d"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave/aave-v3-core/782f51917056a53a2c228701058a6c3fb233684a/contracts/protocol/libraries/logic/SupplyLogic.sol",
+    "file": "core-SupplyLogic.sol",
+    "sha256": "34a3bed849e77131a6c1f6d2af47614cbfdce3c25eba7b39e60608f79d6b2aa9"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave/aave-v3-core/782f51917056a53a2c228701058a6c3fb233684a/contracts/protocol/libraries/math/MathUtils.sol",
+    "file": "core-MathUtils.sol",
+    "sha256": "7f73c927e9801debfe0666e2a6364b92f62fd2d58d0c4b485ff04765fd4dc58d"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave/aave-v3-core/782f51917056a53a2c228701058a6c3fb233684a/contracts/protocol/tokenization/AToken.sol",
+    "file": "core-AToken.sol",
+    "sha256": "6485ecb5b73cdfa0b911e94a68a86dedca6122782311080f0683e503eef70651"
+  },
+  {
+    "url": "https://api.github.com/repos/aave-dao/aave-v3-origin/git/trees/v3.1.0?recursive=1",
+    "file": "v31-tree.json",
+    "sha256": "6900e22884be15eff739356b6f275cf6e6149c847093bda51ba2466839ba9653"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-v3-origin/e627c7428cbb358b9c84b601a009a86b4b871c08/src/core/contracts/protocol/libraries/logic/ValidationLogic.sol",
+    "file": "v31-ValidationLogic.sol",
+    "sha256": "7ae098111ad024bc6ee25edf6ded7737dd28dc0e563e5b05082a660de6183671"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-v3-origin/e627c7428cbb358b9c84b601a009a86b4b871c08/src/core/contracts/protocol/libraries/logic/LiquidationLogic.sol",
+    "file": "v31-LiquidationLogic.sol",
+    "sha256": "8a3508adef113d483fa22af096ad51394a80860f55fae718460a4f366770bb86"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-v3-origin/e627c7428cbb358b9c84b601a009a86b4b871c08/src/core/contracts/protocol/libraries/logic/GenericLogic.sol",
+    "file": "v31-GenericLogic.sol",
+    "sha256": "6a5dbf307801b001ae5cd450c7bc6a7c77947b50f4bc29bdb93661ed22ea795b"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-v3-origin/e627c7428cbb358b9c84b601a009a86b4b871c08/src/core/contracts/protocol/libraries/logic/ReserveLogic.sol",
+    "file": "v31-ReserveLogic.sol",
+    "sha256": "2a7199740877feca5e1598b3b4f4bacf92b8633aeea56cc33f5a94b66004386b"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-v3-origin/e627c7428cbb358b9c84b601a009a86b4b871c08/src/core/contracts/protocol/libraries/logic/FlashLoanLogic.sol",
+    "file": "v31-FlashLoanLogic.sol",
+    "sha256": "163ca9016a09b4d2cf031d6acb15b96fb3d902876c353ecf579b5088f1fdc6e7"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-v3-origin/e627c7428cbb358b9c84b601a009a86b4b871c08/src/core/contracts/protocol/libraries/logic/SupplyLogic.sol",
+    "file": "v31-SupplyLogic.sol",
+    "sha256": "fc5f26360a2e31868a9d0edbc1adbd0bc7eccece7ea9affeec118959c698d788"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-v3-origin/e627c7428cbb358b9c84b601a009a86b4b871c08/src/core/contracts/protocol/libraries/math/MathUtils.sol",
+    "file": "v31-MathUtils.sol",
+    "sha256": "7f73c927e9801debfe0666e2a6364b92f62fd2d58d0c4b485ff04765fd4dc58d"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-v3-origin/e627c7428cbb358b9c84b601a009a86b4b871c08/src/core/contracts/protocol/tokenization/AToken.sol",
+    "file": "v31-AToken.sol",
+    "sha256": "f1482e6efcf54fa1fbcc5af1996c20670fb8b40340aaee816d0755bae0559abe"
+  },
+  {
+    "url": "https://api.github.com/repos/aave-dao/aave-v3-origin/git/trees/v3.2.0?recursive=1",
+    "file": "v32-tree.json",
+    "sha256": "b4f66a57d9980301fe92096153bbb3632e35323035739532614610a7141d261f"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-v3-origin/7c6023e64a1c462f138997ec122d49a97a3d4890/src/contracts/protocol/libraries/logic/ValidationLogic.sol",
+    "file": "v32-ValidationLogic.sol",
+    "sha256": "181ef4f20669f47fa270a001b517b647d9905bd6a57d4602c2070ca06b13a9a5"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-v3-origin/7c6023e64a1c462f138997ec122d49a97a3d4890/src/contracts/protocol/libraries/logic/LiquidationLogic.sol",
+    "file": "v32-LiquidationLogic.sol",
+    "sha256": "a89ee1f088ea60effd5e8f7365f9b8a5aaca4fa5edaee381e67bea8ba8a522ec"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-v3-origin/7c6023e64a1c462f138997ec122d49a97a3d4890/src/contracts/protocol/libraries/logic/GenericLogic.sol",
+    "file": "v32-GenericLogic.sol",
+    "sha256": "c60a5fe6d962b262f97b16fb6e1ad81568cd170cab482f9b17fbfd6f841e9841"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-v3-origin/7c6023e64a1c462f138997ec122d49a97a3d4890/src/contracts/protocol/libraries/logic/ReserveLogic.sol",
+    "file": "v32-ReserveLogic.sol",
+    "sha256": "f5ee263e99f3aa03a903dcaa1298c1476de481faa8f9b79c1e72d87914d2a652"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-v3-origin/7c6023e64a1c462f138997ec122d49a97a3d4890/src/contracts/protocol/libraries/logic/FlashLoanLogic.sol",
+    "file": "v32-FlashLoanLogic.sol",
+    "sha256": "de72aae47c666a2c543728672b809bc4e6ca90c8ab9f95774787da5efb09f11a"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-v3-origin/7c6023e64a1c462f138997ec122d49a97a3d4890/src/contracts/protocol/libraries/logic/SupplyLogic.sol",
+    "file": "v32-SupplyLogic.sol",
+    "sha256": "fc5f26360a2e31868a9d0edbc1adbd0bc7eccece7ea9affeec118959c698d788"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-v3-origin/7c6023e64a1c462f138997ec122d49a97a3d4890/src/contracts/protocol/libraries/math/MathUtils.sol",
+    "file": "v32-MathUtils.sol",
+    "sha256": "7f73c927e9801debfe0666e2a6364b92f62fd2d58d0c4b485ff04765fd4dc58d"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-v3-origin/7c6023e64a1c462f138997ec122d49a97a3d4890/src/contracts/protocol/tokenization/AToken.sol",
+    "file": "v32-AToken.sol",
+    "sha256": "9cc3d2538e0ad68d74db4726b705c9281e5d907e5a7ccb7df2d5b06e788c44d4"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/bgd-labs/proposal-3.0.2-upgrade/main/README.md",
+    "file": "upgrade302-README.md",
+    "sha256": "e02a2029d2dd065e6df0779778cc2a4370b69bb94081cfd1b46ff95234fc35e6"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/bgd-labs/protocol-v3.1-upgrade/main/README.md",
+    "file": "upgrade31-README.md",
+    "sha256": "add3e8c3f3ea46fdf1f5f7a82f21f600d462eb45c733418cb5d854088f39cb5e"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/bgd-labs/protocol-v3.2-upgrade/main/README.md",
+    "file": "upgrade32-README.md",
+    "sha256": "912b679050202338525d68ddb925ea7a80ce830d3b62c9b7a02981fb784cbcab"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/aave-dao/aave-address-book/main/src/AaveV3Polygon.sol",
+    "file": "AaveV3Polygon.sol",
+    "sha256": "2f9e6db655ed067b37aa8ccc2582d374ca50dcaf86f01e8e6d4626b72c3b8afa"
+  }
+]
