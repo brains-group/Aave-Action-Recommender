@@ -39,5 +39,14 @@ errors and timings. `generation-complete.json` reports errors/abstentions;
 case was evaluable. Paper filtering/zero-debt exclusions remain visible in results.
 
 Checks: five funding fixtures cover same-asset repayment, USD units, insufficient
-funding, future checkpoints and nonfinite prices. Integration pilot pending.
+funding, future checkpoints and nonfinite prices. Three integration checks also pass: no-op arms are identical, projected wallet is ignored, and different candidate actions cannot collide in the prediction cache. A functional fitted-model/indexed-simulator regeneration check passed; its deliberately empty feature-history series is only a compatibility test, not a study result. A full-history two-case pilot gates the background full run.
 Manuscript assets and numbers are unchanged.
+
+
+Run directory: `/home/spadef/data/craft-soc/data/evaluation/refreshed-recommendations-20260911`.
+`chain-status.json` records preparation → pilot → full → complete/failed. Four
+regeneration workers and eight evaluation workers. Fresh generation/evaluation
+share only this run's code- and input-keyed simulation cache, avoiding duplicate
+baseline computation. None of the old simulation caches is selected.
+Exact launch arguments are saved in `prepare-receipt.json`; remove `--prepare-only`
+and append `--evaluate` to resume the chain manually. Keep the same code/inputs.

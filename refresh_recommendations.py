@@ -58,7 +58,10 @@ def prepare(a):
             if len(keep):pieces.append(keep)
         value=pd.concat(pieces) if pieces else pd.DataFrame()
         atomic(dest,value);print('Prepared historical features',name,len(value),flush=True)
-    (inputs/'historical-feature-sources.json').write_text(json.dumps(sources,indent=2))
+    source_manifest=inputs/'historical-feature-sources.json'
+    if source_manifest.exists() and json.loads(source_manifest.read_text())!=sources:
+        raise ValueError('Historical feature source metadata changed; select a fresh run')
+    source_manifest.write_text(json.dumps(sources,indent=2))
     # Training source is explicitly available without overwriting the paper dataset.
     training={'core_transactions':str(a.core_transactions.resolve()),'sha256':sha(a.core_transactions),
       'supplementary_predictors':False,'fitted_models':'historical models copied; no retraining in this controlled comparison',
@@ -97,14 +100,14 @@ def generate(a):
     import pandas as pd
     RUN=a.run_dir
     for name in ['generated','logs']:(RUN/name).mkdir(exist_ok=True)
-    os.environ.update(AAVE_EVALUATION_CACHE=str(RUN/'generation-cache'),AAVE_INDEXED_COVERAGE=str(RUN/'inputs/coverage.json'),AAVE_INDEXED_ASSETS=str(RUN/'inputs/assets.json'),AAVE_FROZEN_MODELS='1')
+    os.environ.update(AAVE_SIMULATION_CACHE=str(RUN/'simulation-cache'),AAVE_EVALUATION_CACHE=str(RUN/'generation-cache'),AAVE_INDEXED_COVERAGE=str(RUN/'inputs/coverage.json'),AAVE_INDEXED_ASSETS=str(RUN/'inputs/assets.json'),AAVE_FROZEN_MODELS='1')
     # Explicitly keep historical model inputs; refreshed core is recorded separately.
     os.environ.pop('AAVE_SURVIVAL_DATA',None);os.environ.pop('AAVE_CORE_TRANSACTIONS',None)
     import actionAgentTraining as agent
     from simulator import utils as su
     ROWS=pickle.load(open(RUN/'inputs/ordered-cohort.pkl','rb'))
     n=min(a.limit or len(ROWS),len(ROWS))
-    parts=[pickle.load(open(f,'rb')) for f in sorted((RUN/'inputs/history-parts').glob('*.pkl'))]
+    parts=[pickle.load(open(RUN/'inputs/history-parts'/f'{ie}-{oe}.pkl','rb')) for ie in agent.EVENTS for oe in agent.EVENTS]
     frame=pd.concat([x for x in parts if len(x)]);del parts
     HISTORY={u:g for u,g in frame.groupby('user',sort=False)};del frame
     agent.get_user_history=history
@@ -129,13 +132,15 @@ def generate(a):
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
     for arg in ['run-dir','cohort','old-recommendations','data','model-cache','coverage','assets','core-transactions']:ap.add_argument('--'+arg,type=Path,required=True)
-    ap.add_argument('--workers',type=int,default=4);ap.add_argument('--limit',type=int);ap.add_argument('--prepare-only',action='store_true');ap.add_argument('--evaluate',action='store_true');a=ap.parse_args();a.run_dir=a.run_dir.resolve()
+    ap.add_argument('--workers',type=int,default=4);ap.add_argument('--evaluation-workers',type=int,default=8);ap.add_argument('--limit',type=int);ap.add_argument('--prepare-only',action='store_true');ap.add_argument('--evaluate',action='store_true');a=ap.parse_args();a.run_dir=a.run_dir.resolve()
     prepare(a)
-    if a.prepare_only:return
+    if a.prepare_only:
+        (a.run_dir/'prepare-complete.json').write_text(json.dumps({'complete':True}))
+        return
     generate(a)
     if a.evaluate:
         root=Path(__file__).parent
-        cmd=[sys.executable,str(root/'evaluate_recommendations.py'),'--run-dir',str(a.run_dir/'evaluation'),'--recommendations',str(a.run_dir/'recommendations.pkl'),'--coverage',str(a.run_dir/'inputs/coverage.json'),'--assets',str(a.run_dir/'inputs/assets.json'),'--workers',str(a.workers)]
+        cmd=[sys.executable,str(root/'evaluate_recommendations.py'),'--run-dir',str(a.run_dir/'evaluation'),'--recommendations',str(a.run_dir/'recommendations.pkl'),'--coverage',str(a.run_dir/'inputs/coverage.json'),'--assets',str(a.run_dir/'inputs/assets.json'),'--workers',str(a.evaluation_workers)]
         # Generation-only environment must not leak into the core evaluation arm.
         env=dict(os.environ)
         for k in ['AAVE_INDEXED_COVERAGE','AAVE_INDEXED_ASSETS','AAVE_FROZEN_MODELS']:env.pop(k,None)

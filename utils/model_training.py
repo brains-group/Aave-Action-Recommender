@@ -294,6 +294,8 @@ def get_model_for_pair_and_date(
         if os.path.exists(baseline_path):
             with open(baseline_path, "rb") as f:
                 baseline_data = pkl.load(f)
+            if os.environ.get("AAVE_FROZEN_MODELS") == "1":
+                model.set_param({"device": "cpu", "nthread": 1})
             MODELS_CACHE[model_key] = (model, baseline_data)
             return model, baseline_data
         else:

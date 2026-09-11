@@ -22,7 +22,7 @@ DATA_CACHE_DIR = os.path.join(CACHE_DIR, "data")
 os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 RESULTS_CACHE_DIR = os.path.join(CACHE_DIR, "results")
 os.makedirs(RESULTS_CACHE_DIR, exist_ok=True)
-SIMULATION_RESULTS_CACHE_DIR = os.path.join(CACHE_DIR, "simulation_results")
+SIMULATION_RESULTS_CACHE_DIR = os.environ.get("AAVE_SIMULATION_CACHE", os.path.join(CACHE_DIR, "simulation_results"))
 os.makedirs(SIMULATION_RESULTS_CACHE_DIR, exist_ok=True)
 
 EVENTS = ["Deposit", "Withdraw", "Repay", "Borrow", "Liquidated"]

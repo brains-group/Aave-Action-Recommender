@@ -1,3 +1,5 @@
+Latest: [recommendation regeneration](RECOMMENDATION_REFRESH.md), 2026-09-11. Fresh predictions/actions and chained paired evaluation; previous runs preserved. Run status: /home/spadef/data/craft-soc/data/evaluation/refreshed-recommendations-20260911/chain-status.json.
+
 Latest manuscript work: [reviewer plan](REVIEWER_REVISION_PLAN.md), [tracked correction/build guide](ACM_DLT_Journal_DeFi_Lending_Recommendations/REVISION_TRACKING.md). Clean and marked PDFs verified; simulation job continues unchanged. Untouched local manuscript baseline: /home/spadef/Aave-Action-Recommender/.manuscript-revisions/20260910/.
 
 Latest: [full paired recommendation rerun](PAIRED_RERUN.md). 12,000 recommendations, current-core and indexed-checkpoint variants, fresh caches; results pending completion.
