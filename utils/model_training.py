@@ -299,6 +299,9 @@ def get_model_for_pair_and_date(
         else:
             needToTrainAndSaveModel = False
 
+    if os.environ.get("AAVE_FROZEN_MODELS") == "1":
+        raise FileNotFoundError(f"Frozen model/baseline missing: {model_path}; training is not allowed on inference-only history")
+
     dataset_path = os.path.join(index_event, outcome_event)
 
     # --- Load and Preprocess ---

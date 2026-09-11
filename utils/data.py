@@ -74,15 +74,24 @@ DATE_RANGES_CACHE = None
 
 def get_date_ranges():
     global DATE_RANGES_CACHE
-    if os.path.exists(os.path.join(CACHE_DIR, "date_ranges.pkl")):
+    if not os.environ.get("AAVE_CORE_TRANSACTIONS") and os.path.exists(os.path.join(CACHE_DIR, "date_ranges.pkl")):
         with open(os.path.join(CACHE_DIR, "date_ranges.pkl"), "rb") as f:
             DATE_RANGES_CACHE = pkl.load(f)
     if DATE_RANGES_CACHE is not None:
         return DATE_RANGES_CACHE
-    transactions_df = pyreadr.read_r("./data/transactions.rds")[None]
-    min_date = transactions_df["timestamp"].min() * 1e9
-    logger.debug(f"min_date: {min_date}")
-    max_date = transactions_df["timestamp"].max() * 1e9
+    # Explicit core input for refreshed training; no supplementary snapshots/events.
+    core_path = os.environ.get("AAVE_CORE_TRANSACTIONS")
+    if core_path:
+        # An explicitly selected input cannot consume legacy date-range caches.
+        low, high = float("inf"), -float("inf")
+        for chunk in pd.read_csv(core_path, usecols=["timestamp", "type"], chunksize=250000):
+            chunk = chunk[chunk.type.isin(["borrow", "deposit", "withdraw", "repay", "liquidation"])]
+            low, high = min(low, chunk.timestamp.min()), max(high, chunk.timestamp.max())
+        min_date, max_date = low * 1e9, high * 1e9
+    else:
+        transactions_df = pyreadr.read_r(os.path.join(DATA_PATH, "transactions.rds"))[None]
+        min_date = transactions_df["timestamp"].min() * 1e9
+        max_date = transactions_df["timestamp"].max() * 1e9
     logger.debug(f"max_date: {max_date}")
     train_start_date = min_date + 0.4 * (max_date - min_date)
     logger.debug(f"train_start_date: {train_start_date}")
@@ -90,8 +99,9 @@ def get_date_ranges():
     logger.debug(f"test_start_date: {test_start_date}")
     train_dates = pd.date_range(start=train_start_date, end=test_start_date, freq="2W")
     test_dates = pd.date_range(start=test_start_date, end=max_date, freq="2W")
-    with open(os.path.join(CACHE_DIR, "date_ranges.pkl"), "wb") as f:
-        pkl.dump((train_dates, test_dates), f)
+    if not core_path:
+        with open(os.path.join(CACHE_DIR, "date_ranges.pkl"), "wb") as f:
+            pkl.dump((train_dates, test_dates), f)
     DATE_RANGES_CACHE = (train_dates, test_dates)
     return train_dates, test_dates
 
@@ -156,6 +166,8 @@ def get_user_profile(transaction=None, user=None):
 
 
 def get_train_set():
+    if os.environ.get("AAVE_CORE_TRANSACTIONS") and not os.environ.get("AAVE_SURVIVAL_DATA"):
+        raise ValueError("Refreshed core training requires matching formatted AAVE_SURVIVAL_DATA; refusing historical features")
     TRAIN_SET_CACHE_PATH = os.path.join(CACHE_DIR, "train_set.csv")
     if os.path.exists(TRAIN_SET_CACHE_PATH):
         return pd.read_csv(TRAIN_SET_CACHE_PATH)
@@ -237,6 +249,8 @@ def get_train_set():
 
 
 # def get_train_set():
+    if os.environ.get("AAVE_CORE_TRANSACTIONS") and not os.environ.get("AAVE_SURVIVAL_DATA"):
+        raise ValueError("Refreshed core training requires matching formatted AAVE_SURVIVAL_DATA; refusing historical features")
 #     TRAIN_SET_CACHE_PATH = os.path.join(CACHE_DIR, "train_set.csv")
 #     if os.path.exists(TRAIN_SET_CACHE_PATH):
 #         train_set = pd.read_csv(TRAIN_SET_CACHE_PATH)
