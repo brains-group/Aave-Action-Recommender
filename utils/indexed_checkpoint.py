@@ -16,7 +16,7 @@ def settings():
 
 def attach_checkpoint(profile):
     if not os.environ.get('AAVE_INDEXED_COVERAGE'):return
-    from analysis.indexed_history import PositionHistory
+    from analysis.indexed_history import PositionHistory, position_parts
     txs=profile['transactions']
     if not txs:raise ValueError('No historical checkpoint available')
     timestamp=max(int(t['timestamp']) for t in txs);user=profile['user_address'].lower()
@@ -25,6 +25,11 @@ def attach_checkpoint(profile):
         rows=[json.loads(r[0]) for r in db.execute('SELECT payload FROM rows WHERE entity=? AND id>=? AND id<?',('positionSnapshots',user+'-',user+'.'))]
     rows=[r for r in rows if int(r['timestamp'])<timestamp]
     if not rows:raise ValueError('No strictly prior snapshot coverage for checkpoint')
-    history=PositionHistory(rows,assets,allow_symbol_aggregation=True)
+    used_markets={position_parts(row['position']['id'],user)[0] for row in rows}
+    used_symbols={assets[market]['symbol'] for market in used_markets if market in assets}
+    # Reject affected ambiguous symbols even when just one of the aliases appears
+    # in this account: the core profile and repayment asset still lack addresses.
+    relevant_assets={market:asset for market,asset in assets.items() if market in used_markets or asset['symbol'] in used_symbols}
+    history=PositionHistory(rows,relevant_assets)
     balances,provenance=history.before(user,2**63-1,timestamp)
-    profile['indexed_checkpoint']={'timestamp':timestamp,'balances':{side:{symbol:float(amount) for symbol,amount in amounts.items()} for side,amounts in balances.items()},'provenance':provenance,'source':'Polygon indexed positionSnapshots; historical only; legacy symbol aggregation'}
+    profile['indexed_checkpoint']={'timestamp':timestamp,'balances':{side:{symbol:float(amount) for symbol,amount in amounts.items()} for side,amounts in balances.items()},'provenance':provenance,'source':'Polygon indexed positionSnapshots; historical only; ambiguous underlying symbols rejected; stale balances not accrued between indexed observations'}
