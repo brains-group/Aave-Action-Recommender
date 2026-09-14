@@ -1,0 +1,9 @@
+{
+  "block": 60204769,
+  "account": "0x034a00deb923e225aac841ccb92848d8c2c3efca",
+  "checkpoint_id": "0x034a00deb923e225aac841ccb92848d8c2c3efca:4:1722821545",
+  "max_requests": 1,
+  "query": "{ _meta(block:{number:60204769}) { deployment block { number hash timestamp } }\n markets(first:1000,block:{number:60204769}) { id isActive canBorrowFrom canUseAsCollateral maximumLTV liquidationThreshold liquidationPenalty canIsolate inputToken { id symbol decimals } inputTokenBalance inputTokenPriceUSD outputTokenSupply reserveFactor variableBorrowedTokenBalance stableBorrowedTokenBalance indexLastUpdatedTimestamp supplyIndex borrowIndex supplyCap borrowCap _liquidationProtocolFee _siloedBorrowing rates { id rate side type } }\n account(id:\"0x034a00deb923e225aac841ccb92848d8c2c3efca\",block:{number:60204769}) { id _enabledCollaterals _eMode positions(first:1000) { id side type isCollateral isIsolated balance principal asset { id symbol decimals } market { id } } }\n}",
+  "error": "Snapshot unavailable: ValueError: GraphQL errors: [{\"message\": \"bad indexers: {0x2f09092aacd80196fc984908c5a9a7ab3ee4f1ce: Unavailable(missing block: 60204769, latest: 93629275), 0xf00f7157fa8fd0420b87956d46058a16b2f23adc: Unavailable(no status: indexer not available), 0xf92f430dd8567b0d466358c79594ab58d919a6d4: Unavailable(missing block: 60204769, latest: 93801445)}\"}]",
+  "http_attempts": 1
+}

@@ -1,0 +1,7 @@
+{
+  "simulator_before": "9025cd7765a2812bb8c523affff78573981a026e",
+  "simulator_after": "ea9e6e416ef8e4d08dc76df7da1f327f6cf7bdba",
+  "parent_before": "0f743a77d75258eb0c575f9241c99d0cb0d01a92",
+  "parent_after": "The commit containing this file; resolve with git log -1 --format=%H -- docs/remaining-audit-20260914/REVISIONS.json",
+  "private_replay_workspace": "/home/spadef/.codex/sessions/2026/09/08/remaining-audit-20260914"
+}

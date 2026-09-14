@@ -36,6 +36,8 @@ def simulation_code_identity():
             digest.update(str(source.relative_to(root)).encode()); digest.update(source.read_bytes())
     for source in sorted(Path(__file__).parent.glob("*.py")):
         digest.update(source.name.encode()); digest.update(source.read_bytes())
+    registry = root / 'analysis/polygon_asset_registry.json'
+    if registry.exists(): digest.update(registry.read_bytes())
     price = root / 'data/reserves/price_history.json'
     with price.open('rb') as stream:
         for chunk in iter(lambda: stream.read(1024*1024), b''): digest.update(chunk)

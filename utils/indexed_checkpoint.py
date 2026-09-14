@@ -12,6 +12,12 @@ def settings():
     coverage=json.loads(path.read_text());entry=coverage['entities']['positionSnapshots']
     if coverage['market']!='polygon' or entry['status']!='indexed_interval_complete':raise ValueError('Incomplete Polygon snapshot coverage')
     assets=json.loads(Path(os.environ['AAVE_INDEXED_ASSETS']).read_text())
+    from analysis.asset_registry import polygon_identity_mappings
+    for market, verified in polygon_identity_mappings().items():
+        if market not in assets:
+            assets[market] = verified
+        elif assets[market]['id'].lower() != verified['id'].lower():
+            raise ValueError('Configured market mapping conflicts with deployment evidence: '+market)
     return coverage,entry,assets
 
 def attach_checkpoint(profile):
@@ -30,6 +36,10 @@ def attach_checkpoint(profile):
     # Reject affected ambiguous symbols even when just one of the aliases appears
     # in this account: the core profile and repayment asset still lack addresses.
     relevant_assets={market:asset for market,asset in assets.items() if market in used_markets or asset['symbol'] in used_symbols}
-    history=PositionHistory(rows,relevant_assets)
+    evidence = None
+    if os.environ.get('AAVE_HISTORICAL_EVIDENCE'):
+        from analysis.historical_evidence import HistoricalEvidence
+        evidence = HistoricalEvidence(json.loads(Path(os.environ['AAVE_HISTORICAL_EVIDENCE']).read_text()))
+    history=PositionHistory(rows,relevant_assets, index_evidence=evidence)
     balances,provenance=history.before(user,2**63-1,timestamp)
     profile['indexed_checkpoint']={'timestamp':timestamp,'balances':{side:{symbol:float(amount) for symbol,amount in amounts.items()} for side,amounts in balances.items()},'provenance':provenance,'source':'Polygon indexed positionSnapshots; historical only; ambiguous underlying symbols rejected; stale balances not accrued between indexed observations'}
