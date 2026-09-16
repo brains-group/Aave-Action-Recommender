@@ -117,3 +117,15 @@ font-substitution and image-description warnings remain for the presentation wor
 Manuscript revision baselines are stored in `../.manuscript-revisions/` within the
 project, with owner-only permissions and a local Git exclusion. Do not place manuscript
 baselines, drafts, or revision artifacts in the shared/public research-data folder.
+
+## 2026-09-16 — plan implementation tranche
+
+Every scientific text edit in this tranche uses `\added` or `\replaced`.
+`revision-20260916/paper-changes.json` records exact before/after wording.
+The untouched starting source and author plan are preserved privately in
+`../.manuscript-revisions/20260916/`; the author's plan itself was not edited.
+Edits cover Return Period interpretation/example, contribution scope, stress-test
+interpretation, simulated outcome wording, sensitivity-search qualification and
+the original accuracy denominator. No figures, equations, result values, or
+existing changes markup were removed. Both builds are verified separately.
+See REVISION_PROGRESS.md for completed work versus required experiments.

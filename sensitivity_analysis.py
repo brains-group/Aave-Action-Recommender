@@ -11,6 +11,7 @@ This helps justify the choice of the "magic numbers" in the trend calculation.
 """
 
 import argparse
+import math
 import pandas as pd
 import numpy as np
 from itertools import product, groupby
@@ -31,88 +32,15 @@ from multiprocessing import Pool, cpu_count, Manager
 set_log_file("output_sensitivity_analysis.log")
 
 
-def process_sample_row_binary_search(row, grouped_by_dist, original_coeffs):
-    """
-    Worker function to find the minimum distance for a prediction change
-    using a binary search approach on distance groups.
-    """
-    # Get baseline prediction
-    try:
-        base_at_risk, _, _, _ = determine_liquidation_risk(row, *original_coeffs)
-    except Exception as e:
-        logger.warning(
-            f"Could not process row {row['user']} at {row['timestamp']} for baseline. Error: {e}"
-        )
-        return None
-
-    # Per user request, first check the most extreme difference.
-    # If no change is detected, we assume no smaller change will cause one and stop.
-    # This is an optimization based on an assumption of monotonicity.
-    if grouped_by_dist:
-        extreme_group = grouped_by_dist[-1]
-        change_found_at_extreme = False
-        for coeffs in extreme_group["combinations"]:
-            try:
-                new_at_risk, _, _, _ = determine_liquidation_risk(row, *coeffs)
-                if new_at_risk != base_at_risk:
-                    change_found_at_extreme = True
-                    break
-            except Exception:
-                continue  # Ignore errors in specific coefficient runs
-
-        if not change_found_at_extreme:
-            return {
-                "user": row["user"],
-                "timestamp": row["timestamp"],
-                "base_prediction": base_at_risk,
-                "change_found": False,
-                "min_distance": None,
-            }
-
-    # If a change was found at the extreme, proceed with binary search to find the minimum distance.
-    low = 0
-    high = len(grouped_by_dist) - 1
-    min_change_distance = float("inf")
-
-    while low <= high:
-        mid_idx = (low + high) // 2
-        group = grouped_by_dist[mid_idx]
-        coeffs_to_test = group["combinations"]
-        distance_of_group = group["distance"]
-
-        change_found_in_group = False
-        for coeffs in coeffs_to_test:
-            try:
-                new_at_risk, _, _, _ = determine_liquidation_risk(row, *coeffs)
-                if new_at_risk != base_at_risk:
-                    change_found_in_group = True
-                    break  # Stop checking this group, as requested
-            except Exception as e:
-                logger.debug(f"Could not process row with coeffs {coeffs}. Error: {e}")
-                continue
-
-        if change_found_in_group:
-            # Change found, this distance is a candidate for the minimum.
-            # Try to find an even smaller distance.
-            min_change_distance = min(min_change_distance, distance_of_group)
-            high = mid_idx - 1
-        else:
-            # No change found, need to look at larger distances.
-            low = mid_idx + 1
-
-    final_distance = min_change_distance if min_change_distance != float("inf") else None
-
-    return {
-        "user": row["user"],
-        "timestamp": row["timestamp"],
-        "base_prediction": base_at_risk,
-        "change_found": final_distance is not None,
-        "min_distance": final_distance,
-    }
+def process_sample_row_grid(row, grouped_by_dist, original_coeffs):
+    from revision_eval.sensitivity import first_flip
+    result = first_flip(lambda coefficients: determine_liquidation_risk(row, *coefficients)[0],
+                        original_coeffs, grouped_by_dist)
+    return {"user": row["user"], "timestamp": row["timestamp"], **result}
 
 
 def run_sensitivity_analysis(
-    sample_size=100, num_workers=None, cache_file="./cache/sensitivity_results.pkl", load_cache=False
+    sample_size=100, num_workers=None, cache_file="./cache/sensitivity_grid_v1_results.pkl", load_cache=False
 ):
     """
     Runs a sensitivity analysis on the trend slope coefficients.
@@ -149,11 +77,13 @@ def run_sensitivity_analysis(
         if distance > 0
     ]
 
-    max_distance_tested = grouped_by_dist[-1]["distance"]
+    max_distance_tested = max(math.dist(c, original_coeffs) for g in grouped_by_dist for c in g["combinations"])
 
     if load_cache and os.path.exists(cache_file):
         logger.info(f"Loading cached results from {cache_file}")
         df_results = pd.read_pickle(cache_file)
+        if "method" not in df_results or not df_results["method"].eq("finite-grid-ascending-v1").all():
+            raise ValueError("Legacy or incompatible sensitivity cache; use a fresh cache file")
     else:
         logger.info(
             f"Created {len(grouped_by_dist)} groups of coefficients based on distance to test."
@@ -194,7 +124,7 @@ def run_sensitivity_analysis(
                 ),
             ) as pool:
                 worker_func = partial(
-                    process_sample_row_binary_search,
+                    process_sample_row_grid,
                     grouped_by_dist=grouped_by_dist,
                     original_coeffs=original_coeffs,
                 )
@@ -214,7 +144,7 @@ def run_sensitivity_analysis(
             for _, row in tqdm(
                 sample_set.iterrows(), total=len(sample_set), desc="Analyzing samples"
             ):
-                result = process_sample_row_binary_search(
+                result = process_sample_row_grid(
                     row, grouped_by_dist, original_coeffs
                 )
                 if result:
@@ -309,7 +239,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--cache-file",
         type=str,
-        default="./cache/sensitivity_results.pkl",
+        default="./cache/sensitivity_grid_v1_results.pkl",
         help="File to save or load cached results.",
     )
     parser.add_argument(
