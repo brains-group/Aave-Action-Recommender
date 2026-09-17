@@ -144,7 +144,7 @@
 %% The abstract is a short summary of the work to be presented in the
 %% article.
 \begin{abstract}
-Decentralized Finance (DeFi) lending protocols like Aave V3 rely on over-collateralization to secure loans, yet users frequently face liquidation due to volatile market conditions. Existing risk management tools utilize static health-factor thresholds, which are reactive and fail to distinguish between administrative "dust" cleanup and genuine insolvency. In this work, we propose an autonomous agent that leverages time-to-event (survival) analysis to move beyond prediction to execution. Unlike passive risk signals, this agent simulates counterfactual futures and executes protocol-faithful interventions to proactively prevent liquidations. We introduce a return period metric derived from a numerically stable XGBoost Cox proportional hazards model to normalize risk across transaction types, coupled with a volatility-adjusted trend score to filter transient market noise. To select optimal interventions, we implement a counterfactual optimization loop evaluated within a high-fidelity Aave V3 simulator. Our advanced simulation framework explicitly models dynamic risk margins, dust liquidation mechanics, and inferred wallet balance constraints to ensure high realism under incomplete on-chain observability. We validate our approach on a behaviorally diverse cohort of high-risk user profiles. \replaced[comment={R1-5 and R2-5: abstract outcome scope}]{In the evaluated high-risk cohort, paired replay-based simulations show prevention of 86.83\% of baseline simulated liquidations, with no observed worsening in those paired runs.}{The results demonstrate the agent's ability to strictly prevent 86.83\% of imminent liquidations while maintaining a zero worsening rate.} Furthermore, when accounting for interventions that buy users critical time, delaying inevitable insolvencies by at least 7 days, the effective liquidation mitigation rate increases to 91.9\%. By successfully differentiating between actionable financial risks and negligible administrative noise, this framework optimizes capital efficiency and provides a highly resilient safety mechanism for decentralized lending.
+Decentralized Finance (DeFi) lending protocols like Aave V3 rely on over-collateralization to secure loans, yet users frequently face liquidation due to volatile market conditions. Existing risk management tools utilize static health-factor thresholds, which are reactive and fail to distinguish between administrative "dust" cleanup and genuine insolvency. In this work, we propose an autonomous agent that leverages time-to-event (survival) analysis to move beyond prediction to execution. \replaced[comment={R2-5: distinguish simulated and on-chain execution}]{The agent uses survival-based risk signals to select candidate interventions and evaluates their counterfactual outcomes in protocol-aware simulation.}{Unlike passive risk signals, this agent simulates counterfactual futures and executes protocol-faithful interventions to proactively prevent liquidations.} We introduce a return period metric derived from a numerically stable XGBoost Cox proportional hazards model to normalize risk across transaction types, coupled with a volatility-adjusted trend score to filter transient market noise. To select optimal interventions, we implement a counterfactual optimization loop evaluated within a high-fidelity Aave V3 simulator. Our advanced simulation framework explicitly models dynamic risk margins, dust liquidation mechanics, and inferred wallet balance constraints to ensure high realism under incomplete on-chain observability. We validate our approach on a behaviorally diverse cohort of high-risk user profiles. \replaced[comment={R1-5 and R2-5: abstract outcome scope}]{In the evaluated high-risk cohort, paired replay-based simulations show prevention of 86.83\% of baseline simulated liquidations, with no observed worsening in those paired runs.}{The results demonstrate the agent's ability to strictly prevent 86.83\% of imminent liquidations while maintaining a zero worsening rate.} Furthermore, when accounting for interventions that buy users critical time, delaying inevitable insolvencies by at least 7 days, the effective liquidation mitigation rate increases to 91.9\%. By successfully differentiating between actionable financial risks and negligible administrative noise, this framework optimizes capital efficiency and provides a highly resilient safety mechanism for decentralized lending.
 \end{abstract}
 
 %%
@@ -239,7 +239,25 @@ Our work bridges these two strands. We introduce a protocol-faithful Aave v3 sim
 In practice, an autonomous agent operating in this setting must not only predict liquidation risk, but also (i) determine \emph{whether} intervention is economically justified, (ii) select \emph{which action} is most appropriate given user behavior and protocol constraints, and (iii) ensure that the intervention itself does not introduce new failure modes. These requirements motivate our integration of survival modeling with counterfactual simulation and explicitly safety-verified optimization.
 This distinction is particularly important in DeFi, where unnecessary interventions incur real gas costs and may themselves exacerbate risk during periods of network congestion.
 
+
+\begin{table}[t]
+\centering\small
+\caption{\added[comment={R2-1: comparison of methodological roles}]{Roles of related approaches. This compares documented capabilities, not measured superiority.}}
+\label{tab:revision_related_roles}
+\begin{tabular}{p{.22\linewidth}p{.34\linewidth}p{.34\linewidth}}
+\hline
+\added{Approach} & \added{Signal and decision} & \added{Relation to this study}\\\hline
+\added{DeFi survival analysis~\cite{green2023defi}} & \added{Event-specific time-to-event estimates} & \added{Provides a forecasting foundation; an intervention rule is an additional component.}\\
+\added{Threshold automation~\cite{defisaver_strategies_revision,instadapp_protection_revision}} & \added{Trigger conditions and predefined debt-management actions} & \added{Motivates practical intervention baselines; production execution and collateral swaps are outside our wallet-funded approximation.}\\
+\added{Agent execution toolkits~\cite{brahma_consolekit_2025}} & \added{Smart-account execution, configurable policies and transaction simulation} & \added{Provides execution infrastructure; distinct from evaluating the survival-based policy studied here.}\\
+\added{Protocol simulation} & \added{State transitions, constraints and projected outcomes} & \added{Evaluates a proposed action but does not itself select a survival-based policy.}\\
+\added{Proposed framework} & \added{Cross-event risk comparison, trend analysis and action search} & \added{Connects predictions to simulated feasible interventions; matched policy evaluation measures the added value.}\\\hline
+\end{tabular}
+\end{table}
+
 \section{Background}
+
+\added[comment={R1-2 and R2-3: practical baseline scope}]{Our comparison distinguishes a forecasting method from an execution service. DeFi Saver documents trigger--action strategies with both one-time and recurring execution~\cite{defisaver_strategies_revision}; Instadapp documents trigger and target health factors and collateral-funded debt reduction~\cite{instadapp_protection_revision}. The wallet-funded automation-style baseline used here isolates a threshold policy under the same capital assumptions as the agent. It does not reproduce those services\textquotesingle{} swaps, fees, monitoring infrastructure, or execution guarantees.}
 
 \subsection{Liquidation Risk in Lending Protocols}
 
@@ -248,7 +266,7 @@ For instance, on Aave~\cite{aave_v3_technical_paper}, each collateral asset has 
 \texttt{Liquidation} means the borrower’s collateral may be sold off by third-party bots, who take a liquidation bonus (often ~5–10\%) as reward.
 This results in the user losing more collateral value than if they had repaid or added collateral in time~\cite{qin2021cefi}.
 
-A distinct category of liquidation events, often termed ``dust liquidations,'' occurs when a user's outstanding debt or collateral value falls below a protocol-defined minimum threshold (e.g., due to partial repayments leaving a tiny residual balance)~\cite{aave_v4_liquidations}. In these cases, the protocol allows liquidators to clear the entire position regardless of the HF, primarily to prevent state bloat from economically insignificant accounts~\cite{qin2021empirical}. Unlike standard insolvency liquidations driven by price volatility, dust liquidations are mechanical cleanup events that risk models must simulate to avoid validation errors.
+\replaced[comment={R1-1 and R2-4: dust definitions and protocol scope}]{Small-balance liquidations and small partial repayments require separate reporting. The fraction of debt repaid and the residual dollar balance measure different properties: a repayment below 1\% of a large loan need not be economically negligible. Small balances alone do not establish liquidation eligibility under Aave V3; the archived validation logic checks the health factor, while close-factor and residual-balance rules depend on the deployed version~\cite{aave_v3_validation_revision}. We therefore distinguish analysis filters from protocol execution rules rather than importing an HF exception from Aave V4.}{A distinct category of liquidation events, often termed ``dust liquidations,'' occurs when a user's outstanding debt or collateral value falls below a protocol-defined minimum threshold (e.g., due to partial repayments leaving a tiny residual balance)~\cite{aave_v4_liquidations}. In these cases, the protocol allows liquidators to clear the entire position regardless of the HF, primarily to prevent state bloat from economically insignificant accounts~\cite{qin2021empirical}. Unlike standard insolvency liquidations driven by price volatility, dust liquidations are mechanical cleanup events that risk models must simulate to avoid validation errors.}
 
 Modern protocols have introduced measures aimed at reducing borrower losses during insolvency events. For example, Aave v3 limits each liquidation transaction to at most 50\% of a debt (close-factor), and the upcoming Aave v4 upgrade goes further, supporting partial liquidations and batch auctions to minimize slippage~\cite{binance_news_aave_v4}. This allows borrowers to avoid full liquidation of their position at once and incur lower costs when liquidations do happen.
 Nonetheless, the best outcome for users is to never be liquidated at all. This is where automation tools come in: by continuously tracking the loan’s health and acting preemptively (e.g., repaying some debt or adding collateral), bots can maintain a safe buffer before the HF hits the danger zone. During volatile crashes, on-chain congestion can make manual rescue transactions too slow or expensive. In one Aave crash analysis, 18 loans got liquidated despite users attempting ``top-up'' transactions, because the network was so congested that their manual interventions failed to confirm in time~\cite{gauntlet_aave_2021}. Clearly, automated, always-on risk management can be a lifesaver in DeFi.
@@ -353,7 +371,7 @@ We augment this base signal with an \textbf{Acceleration} term ($Z_{accel}$), ca
 \end{equation}
 
 \noindent where $\omega$, $\lambda$, and $\gamma$ represent the weighting coefficients for acceleration, volatility penalty, and momentum adjustment, respectively.
-In our experiments, we set these hyperparameters to $\omega=0.8$, $\lambda=0.6$, and $\gamma=0.3$. The high acceleration weight (0.8) prioritizes proactive responses to fast-moving threats. The volatility penalty (0.6) acts as a noise filter, suppressing mean-reverting transient fluctuations in high-variance assets. Finally, the momentum scalar (0.3) scales intervention urgency based on deviations from the user's historical baseline. This composite metric ensures the agent acts on structural, accelerating insolvency rather than market noise.
+In our experiments, we set these hyperparameters to $\omega=0.8$, $\lambda=0.6$, and $\gamma=0.3$. The high acceleration weight (0.8) prioritizes proactive responses to fast-moving threats. \replaced[comment={R2: qualify volatility interpretation}]{The volatility term (0.6) lowers the trend score. Since a lower score can indicate greater liquidation risk, this subtraction does not by itself establish suppression of noisy warnings. Its effect must be assessed through the coefficient and decision sensitivity checks.}{The volatility penalty (0.6) acts as a noise filter, suppressing mean-reverting transient fluctuations in high-variance assets.} Finally, the momentum scalar (0.3) scales intervention urgency based on deviations from the user's historical baseline. This composite metric ensures the agent acts on structural, accelerating insolvency rather than market noise.
 
 To ensure these coefficients do not establish a fragile, overfitted decision boundary, we conducted a rigorous sensitivity analysis evaluating the robustness of the agent's binary risk prediction (i.e., whether a position is deemed ``at risk'' or ``safe'') against parameter perturbation. We defined a bounded parameter space around our baseline configuration, varying the coefficients incrementally: $\omega \in [0.6, 1.0]$, $\lambda \in [0.4, 0.8]$, and $\gamma \in [0.1, 0.5]$. Every combination within this space was mapped to its Euclidean distance from the baseline vector $\mathbf{v}_{base} = [0.8, 0.6, 0.3]$. 
 
@@ -597,6 +615,8 @@ We measure performance using three key metrics derived from the simulation pairs
 % The simulator is validated on a dataset of over 10 million transactions from the Aave v3 Polygon protocol (March 2022 -- August 2025). 
 
 \subsection{Agent Evaluation Subset}
+
+\added[comment={R1-2 and R1-3: matched cohort experiment}]{The revision separates two evaluation frames. The high-risk frame selects imminent observed liquidations and remains a stress test. The normal frame samples eligible users and checkpoints without using their subsequent liquidation outcome; ``normal'' does not mean guaranteed safe. The implemented comparison selects 200 users per frame from the held-out chronological period, with no users shared between frames, and retains failures and abstentions. It uses a common seven-day end time, a 600-second action delay, and a \$1,000 gross intervention budget for the agent and each policy. These settings define the new comparison and do not retroactively change the original result denominators. The sampling frame requires a stored profile and a liquidation-target feature row from Borrow, Deposit, Repay, or Withdraw origins; the available Liquidated-to-Liquidated source table is empty. Thus the normal sample represents this eligible data frame, not all Polygon users.}
 To rigorously evaluate our agent designed for liquidation prevention, we constructed a specific \textbf{Evaluation Cohort} from our dataset described in \Cref{sec:dataset}. We selected a time window covering the 40\textsuperscript{th} to 80\textsuperscript{th} percentile of the protocol's history (approx. 2023--2024) to ensure sufficient training history while reserving the final 20\% for future validation. Given the significant computational resources required for high-fidelity agent simulations, evaluating the entire dataset was infeasible. Therefore, we employed a stratified sampling strategy to balance distinct user coverage with computational efficiency:
 \begin{enumerate}
     \item For standard event pairs (e.g., \texttt{Deposit} $\to$ \texttt{Withdraw}), we randomly sampled 300 instances per pair to ensure balanced coverage of typical user behaviors.
@@ -605,6 +625,8 @@ To rigorously evaluate our agent designed for liquidation prevention, we constru
 This process yielded the 8400 distinct user checkpoints used in our results.
 
 \subsection{Liquidation Detection Engine}
+
+\added[comment={R1-1 and R1-2: common evaluator and targets}]{For the revised comparison, the same evaluator processes the no-intervention control, static HF-buffer, repay-only, deposit-only, automation-style, and agent recommendations. Baseline triggers and targets are fixed at HF 1.10 and 1.20 before comparative evaluation. Repayment requires the debt asset in the wallet; no implicit swap or external funding is added. Protocol-eligibility outcomes and static/dynamic warning-policy outcomes are reported separately. Agreement among time-checking strategies tests temporal consistency, not independent correctness of their shared liquidation rules.}
 \label{sec:liq}
 Validating liquidation events in simulation is non-trivial due to the discrete nature of time-stepping. To ensure robustness, we define a ``Confirmed Liquidation" only when a consensus is reached among six parallel detection algorithms:
 \begin{itemize}
@@ -643,7 +665,9 @@ Evaluation metrics focus on two dimensions: \emph{state fidelity} and \emph{even
 
 \begin{figure}[t]
     \centering
-    \includegraphics[width=\linewidth]{figures/correlation_analysis_liquidation_focused.png}
+    \includegraphics[width=.58\linewidth,trim=0bp 0bp 1535bp 0bp,clip]{figures/correlation_analysis_liquidation_focused.png}\\[4pt]
+    \includegraphics[width=.48\linewidth,trim=940bp 0bp 785bp 0bp,clip]{figures/correlation_analysis_liquidation_focused.png}\hfill
+    \includegraphics[width=.48\linewidth,trim=1690bp 0bp 0bp 0bp,clip]{figures/correlation_analysis_liquidation_focused.png}
     \caption{Simulator state fidelity and transaction feasibility.}
     \label{fig:correlation}
 \end{figure}
@@ -657,14 +681,18 @@ The feasibility-based view complements correlation by measuring \emph{action-con
 \subsubsection{Liquidation Realism Evaluation}
 \label{sec:liquidation_realism}
 
+\added[comment={R1-5: figure layout and denominator clarification}]{Figures~\ref{fig:correlation} and~\ref{fig:liquidation_prediction_behavior} retain the original plotted data with enlarged, rearranged panels. In Figure~\ref{fig:correlation}, the distribution is above the feasibility and count matrices. In Figure~\ref{fig:liquidation_prediction_behavior}, the bar chart and HF distributions are above the timing plot. The percentages labeled ``accuracy in the original liquidation bar chart are detection fractions among observed liquidation events, not overall accuracy including negative cases.}
+
 \begin{figure}
     \centering
-    \includegraphics[width=\linewidth]{figures/liquidation_prediction_analysis.png}
-    \caption{%Liquidation prediction behavior under dynamic risk modeling.    
+    \includegraphics[width=.45\linewidth,trim=0bp 0bp 1612bp 0bp,clip]{figures/liquidation_prediction_analysis.png}\hfill
+    \includegraphics[width=.45\linewidth,trim=806bp 0bp 806bp 0bp,clip]{figures/liquidation_prediction_analysis.png}\\[4pt]
+    \includegraphics[width=.50\linewidth,trim=1612bp 0bp 0bp 0bp,clip]{figures/liquidation_prediction_analysis.png}
+    \caption{\replaced[comment={R1-5: concise caption and evaluation units}]{\textbf{Original liquidation-positive diagnostics, rearranged for readability.} Upper left: detection fractions among observed liquidation events; the total denominator is 51,369 and the dust subset contains 30,006 observations. Upper right: reconstructed HF distributions under the original diagnostic views. Lower: the warning margin plotted at observed event times. These panels do not supply negative-case accuracy, an independent oracle-HF reference, or prospective warning lead time.}{%Liquidation prediction behavior under dynamic risk modeling.    
     \textbf{Liquidation prediction behavior under dynamic risk modeling.}
     Left: Prediction accuracy across liquidation detection strategies. A strict threshold ($HF<1.0$) captures fewer than half of observed liquidations, while a margin-based criterion ($HF<1.10$) improves coverage. Incorporating a dynamic margin that scales with the time gap since the last user interaction substantially increases predictability. Dust liquidations (covering $<1\%$ of outstanding debt) are identified separately and exhibit high mechanical predictability.
 Center: Distribution of health factor values at liquidation under different prediction methods (log scale). Liquidations cluster near, but not exactly at, the theoretical boundary $HF=1.0$, reflecting oracle delays, volatility, and interest accrual. Combined HF+LT criteria yield more conservative risk estimates than single-metric thresholds.
-Right: Relationship between time gap and dynamic margin threshold. Longer inactivity periods correspond to higher uncertainty and necessitate more conservative margins. Predictable liquidations dominate at longer horizons, validating the use of time-adaptive risk thresholds.
+Right: Relationship between time gap and dynamic margin threshold. Longer inactivity periods correspond to higher uncertainty and necessitate more conservative margins. Predictable liquidations dominate at longer horizons, validating the use of time-adaptive risk thresholds.}
 }
     \label{fig:liquidation_prediction_behavior}    
 \end{figure}
@@ -758,12 +786,14 @@ Evaluating the performance of liquidation interventions requires understanding b
 
 \subsection{Simulation Robustness}
 
-To ensure these results were not artifacts of simulation noise, we employed the multi-strategy liquidation detection engine detailed in Section \ref{sec:liq}. The results showed \textbf{100\% Consensus Agreement} across all six strategies for both the baseline and intervention simulations. This unanimous agreement confirms that the liquidations prevented by the agent were unambiguous, hard-coded protocol events, and the rescue states were robust across all temporal granularities.
+To ensure these results were not artifacts of simulation noise, we employed the multi-strategy liquidation detection engine detailed in Section \ref{sec:liq}. The results showed \textbf{100\% Consensus Agreement} across all six strategies for both the baseline and intervention simulations. \replaced[comment={R1 and R2: shared-rule validation limitation}]{This agreement establishes consistency across the tested temporal strategies. It does not independently validate the liquidation rules or establish that an eligible position would receive an on-chain liquidation transaction.}{This unanimous agreement confirms that the liquidations prevented by the agent were unambiguous, hard-coded protocol events, and the rescue states were robust across all temporal granularities.}
 
 
 \section{Conclusion}
 
-In this work, we presented an agentic AI framework that reframes DeFi portfolio management as a proactive, time-to-event prediction problem. By replacing static HF rules with a ``Return Period" metric normalized via Cox proportional hazards models, our agent anticipates liquidations before they become imminent. We validated this approach using a novel, protocol-faithful Aave v3 simulator that reconstructs global pricing states and infers wallet feasibility. Empirically, the agent prioritized safety, achieving a zero Worsening Rate while rescuing nearly 87\% of critically at-risk positions that standard buffers failed to save. Furthermore, the system successfully distinguished between actionable insolvency risk and administrative ``dust," optimizing capital efficiency.
+\added[comment={R2-3 and R2-4: scope and portability}]{The intervention evidence is conditional on reconstructed positions, shared prices, available funding, and the simulated follow-up. Paired runs make these conditions comparable across policies, but do not establish a live on-chain causal effect. The current policy-comparison path projects positions after the intervention rather than replaying all later recorded user actions. Wallet balances remain retrospectively inferred; explicit funding multipliers and retained execution failures expose sensitivity to that assumption. Survival estimation and risk-score transformations can be reused on another deployment, while collateral rules, oracles, reserve configuration, transaction ordering, and action feasibility require deployment-specific adaptation. Cross-deployment performance is not claimed by the Polygon experiments.}
+
+In this work, we presented an agentic AI framework that reframes DeFi portfolio management as a proactive, time-to-event prediction problem. By replacing static HF rules with a ``Return Period" metric normalized via Cox proportional hazards models, our agent anticipates liquidations before they become imminent. We validated this approach using a novel, protocol-faithful Aave v3 simulator that reconstructs global pricing states and infers wallet feasibility. Empirically, the agent prioritized safety, achieving a zero Worsening Rate while \replaced[comment={R1: remove unsupported baseline superiority}]{preventing nearly 87\% of baseline simulated liquidations in the selected high-risk evaluation}{rescuing nearly 87\% of critically at-risk positions that standard buffers failed to save}. Furthermore, the system successfully distinguished between actionable insolvency risk and administrative ``dust," optimizing capital efficiency.
 
 % In this work, we presented an agentic AI framework that reframes DeFi portfolio management from a reactive, threshold-based task to a proactive, time-to-event prediction problem. By replacing static HF rules with a \emph{``Return Period"} metric derived from Cox proportional hazards models, our agent successfully normalizes risk across diverse transaction types and anticipates liquidations before they become imminent.
 
@@ -786,6 +816,34 @@ More broadly, this work illustrates how predictive blockchain analytics can be e
 %%
 %% If your work has an appendix, this is the place to put it.
 \appendix
+
+\section{Bounded Predictive Comparison}
+\added[comment={R1-4 and R2: new fixed-horizon predictive evidence}]{A separate chronological benchmark fits Kaplan--Meier (KM), penalized Cox PH, and XGBoost-Cox to 10,000 training observations per populated liquidation-target task and evaluates 2,000 later observations per task. Training outcomes are administratively censored at the split and preprocessing is fitted on training data only. These newly fitted models are distinct from the frozen models used for agent recommendations and from the original 69.11\% risk-flag statistic. Cox regularization is increased only when the numerical optimizer does not converge: Withdraw uses penalty 10; the other tasks use 1. XGBoost uses 200 depth-three boosting rounds.}
+\begin{table}[ht]
+\centering\small
+\caption{\added{New bounded predictive benchmark. Positive counts refer to seven-day liquidations among 2,000 test observations per task. C is Harrell concordance; AUC is seven-day cumulative/dynamic AUC; AP is seven-day average precision; Brier is seven-day IPCW Brier score.}}
+\label{tab:revision-predictive}
+\begin{tabular}{llrrrrr}
+\toprule
+\added{Origin} & \added{Model} & \added{Positive} & \added{C} & \added{AUC} & \added{AP} & \added{Brier}\\
+\midrule
+\added{Borrow} & \added{KM} & \added{13} & \added{0.500} & \added{0.500} & \added{0.006} & \added{0.0065}\\
+\added{Borrow} & \added{CoxPH} & \added{13} & \added{0.618} & \added{0.643} & \added{0.011} & \added{0.1186}\\
+\added{Borrow} & \added{XGBoostCox} & \added{13} & \added{0.790} & \added{0.846} & \added{0.213} & \added{0.0060}\\
+\added{Deposit} & \added{KM} & \added{40} & \added{0.500} & \added{0.500} & \added{0.020} & \added{0.0197}\\
+\added{Deposit} & \added{CoxPH} & \added{40} & \added{0.813} & \added{0.870} & \added{0.231} & \added{0.0182}\\
+\added{Deposit} & \added{XGBoostCox} & \added{40} & \added{0.924} & \added{0.961} & \added{0.443} & \added{0.0168}\\
+\added{Repay} & \added{KM} & \added{12} & \added{0.500} & \added{0.500} & \added{0.006} & \added{0.0060}\\
+\added{Repay} & \added{CoxPH} & \added{12} & \added{0.652} & \added{0.677} & \added{0.010} & \added{0.0062}\\
+\added{Repay} & \added{XGBoostCox} & \added{12} & \added{0.779} & \added{0.857} & \added{0.043} & \added{0.0061}\\
+\added{Withdraw} & \added{KM} & \added{4} & \added{0.500} & \added{0.500} & \added{0.002} & \added{0.0020}\\
+\added{Withdraw} & \added{CoxPH} & \added{4} & \added{0.709} & \added{0.643} & \added{0.003} & \added{0.0020}\\
+\added{Withdraw} & \added{XGBoostCox} & \added{4} & \added{0.959} & \added{0.923} & \added{0.020} & \added{0.0020}\\
+\bottomrule
+\end{tabular}
+\end{table}
+\added{The test periods contain few positive events, especially for Withdraw. XGBoost improves ranking over KM in these samples, but does not consistently improve Brier score: KM has a lower seven-day IPCW Brier score for Repay and Withdraw. Historical feature lineage remains a limitation; this compact benchmark does not establish deployment-wide performance or independence of repeated account observations. The run artifacts retain row identities, censoring estimates, precision/recall, calibration bins, Uno concordance and integrated Brier scores. Policy effectiveness is evaluated separately under matched simulation assumptions.}
+
 
 
 

@@ -129,3 +129,7 @@ interpretation, simulated outcome wording, sensitivity-search qualification and
 the original accuracy denominator. No figures, equations, result values, or
 existing changes markup were removed. Both builds are verified separately.
 See REVISION_PROGRESS.md for completed work versus required experiments.
+
+## 2026-09-16 — matched-study tranche
+
+Untouched sources are in `../.manuscript-revisions/20260916-study/`. Exact text and structural/asset-layout changes, including added bibliography entries and measured predictive appendix, are in `revision-study-20260916/paper-changes.json`. Original images remain unchanged. Clean and marked PDFs and build records are in that same local manuscript subdirectory. Every scientific text/table/caption edit uses the changes package; structural commands are recorded explicitly. The author's revision plan is unchanged. No uncompleted policy or sensitivity results have been inserted.

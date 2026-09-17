@@ -36,42 +36,9 @@ def get_expected_time_to_event(model, X_test, baseline_meta, max_prediction_days
     This serves as a robust 'Time to Event' proxy for rare events.
     Lower value = Higher Risk (Event expected sooner).
     """
-    times = baseline_meta["times"]
-    cum_hazards = baseline_meta["cum_hazards"]
-    max_t = baseline_meta["max_time"]
-    final_rate = baseline_meta["final_rate"]
-    log_shift = baseline_meta["log_shift"]
-
-    # 1. Define a standard window for probability estimation (e.g., 7 days)
-    # This acts as our "instantaneous" risk measurement window.
-    window_seconds = 7 * 24 * 3600
-
-    # 2. Get Baseline Hazard for this window
-    if window_seconds <= max_t:
-        idx = np.searchsorted(times, window_seconds) - 1
-        idx = max(0, min(idx, len(cum_hazards) - 1))
-        h0 = cum_hazards[idx]
-    else:
-        excess = window_seconds - max_t
-        h0 = cum_hazards[-1] + (excess * final_rate)
-
-    # 3. Calculate Risk Probability for each user
-    log_margin = model.predict(X_test, output_margin=True)
-    relative_risk = np.exp(np.clip(log_margin - log_shift, -20, 20))
-
-    # Prob = 1 - exp(-H0 * RR)
-    # We clip the exponent to avoid overflow/underflow
-    exponent = -h0 * relative_risk
-    exponent = np.clip(exponent, -50, 0)
-    probability = 1.0 - np.exp(exponent)
-
-    # 4. Calculate Return Period: Window / Probability
-    # If prob is 1.0, time is Window.
-    # If prob is tiny, time is huge.
-    # Add epsilon to prob to prevent division by zero.
-    probability = np.maximum(probability, 1e-12)
-
-    return window_seconds / probability
+    from revision_eval.probability import horizon_probability
+    probability = horizon_probability(model.predict(X_test, output_margin=True), baseline_meta)
+    return 604800. / np.maximum(probability, 1e-12)
 
 
 def get_user_history(user_id: str, up_to_timestamp: int) -> pd.DataFrame:

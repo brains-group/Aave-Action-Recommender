@@ -205,7 +205,8 @@ def get_price_history_value(symbol, timestamp):
     if symbol not in _price_timestamps_cache:
         _price_timestamps_cache[symbol] = sorted(symbol_price_history.keys())
     sorted_timestamps = _price_timestamps_cache[symbol]
-    closest_timestamp = sorted_timestamps[
-        bisect.bisect_left(sorted_timestamps, timestamp, hi=len(sorted_timestamps) - 1)
-    ]
+    index = bisect.bisect_right(sorted_timestamps, timestamp) - 1
+    if index < 0:
+        raise ValueError("No price observation at or before decision time")
+    closest_timestamp = sorted_timestamps[index]
     return symbol_price_history[closest_timestamp]

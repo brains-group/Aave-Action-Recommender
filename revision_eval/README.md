@@ -79,3 +79,7 @@ published score before citing it as a corrected result. No expensive rerun was
 started while the simulator evaluation occupies the workers.
 
 Tests: `python -m unittest discover -s tests -p test_revision_eval.py -v`.
+
+## Full study runner (2026-09-16)
+
+The integrated cohort, policy, predictive, regime and sensitivity implementation is now described in [STUDY.md](STUDY.md). Its commands supersede the pending-integration notes above. Historical feature-lineage and original-result reproduction remain distinct from the new bounded study.
