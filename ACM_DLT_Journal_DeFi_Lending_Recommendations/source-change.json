@@ -1,9 +1,0 @@
-{
-  "baseline_sha256": "3bc590088a5bcd7f6fa1e2082e9bc9438bbdb621e44e95f4797a95f73343cc8a",
-  "revised_sha256": "b02970e71a3c753d04e3e45bc21bf4dbb93de8e4b287552ff726501b14ca9863",
-  "change_id": "R1-P1",
-  "original_command_reported_by_author": "\\Cref{sec:experimental_validation}",
-  "already_corrected_command_in_baseline": "\\label{sec:experimental_validation}",
-  "active_corrected_command": "\\label{sec:experimental_validation}",
-  "tracking": "Live label outside markup; deleted reference protected by mbox for ulem; replacement explained by changes comment and exact ledger"
-}
