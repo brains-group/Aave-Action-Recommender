@@ -16,7 +16,10 @@ def propose(state, policy, *, trigger=1.10, target=1.20, budget_usd=1000., gas_u
     if any(k not in state for k in required): raise ValueError('Missing checkpoint inputs')
     if state['state_timestamp'] > state['timestamp']: raise ValueError('Future state cannot fund a policy')
     debt, weighted = float(state['total_debt_usd']), float(state['weighted_collateral_usd'])
-    if not all(math.isfinite(v) and v >= 0 for v in [debt, weighted]): raise ValueError('Invalid balances')
+    if not all(math.isfinite(v) and v >= -1e-8 for v in [debt, weighted]): raise ValueError('Invalid balances')
+    # Simulator arithmetic can leave sub-cent negative dust after full repayment.
+    # A material negative balance remains an error; no funding is created here.
+    debt, weighted = max(0., debt), max(0., weighted)
     out = dict(case_id=state['case_id'], timestamp=state['timestamp'], policy=policy,
                action=None, capital_usd=0., action_count=0, execution_status='not_executed',
                gas_usd_assumption=gas_usd, budget_usd=budget_usd, trigger=trigger, target=target)
@@ -25,8 +28,9 @@ def propose(state, policy, *, trigger=1.10, target=1.20, budget_usd=1000., gas_u
     candidates = []
     for asset, a in sorted(state['assets'].items()):
         price, wallet, owed, lt = [float(a[k]) for k in ['price_usd','wallet','debt','liquidation_threshold']]
-        if not all(math.isfinite(v) for v in [price,wallet,owed,lt]) or price <= 0 or min(wallet,owed,lt)<0 or lt>1:
+        if not all(math.isfinite(v) for v in [price,wallet,owed,lt]) or price <= 0 or min(wallet*price,owed*price)<-1e-8 or lt<0 or lt>1:
             raise ValueError('Invalid asset inputs')
+        wallet, owed = max(0.,wallet), max(0.,owed)
         for action in ['Repay','Deposit']:
             if policy=='repay_only' and action!='Repay' or policy=='deposit_only' and action!='Deposit':continue
             if action=='Deposit' and (lt==0 or not a.get('collateral_enabled',False)):continue

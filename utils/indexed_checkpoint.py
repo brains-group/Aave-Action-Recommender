@@ -32,10 +32,13 @@ def attach_checkpoint(profile):
     rows=[r for r in rows if int(r['timestamp'])<timestamp]
     if not rows:raise ValueError('No strictly prior snapshot coverage for checkpoint')
     used_markets={position_parts(row['position']['id'],user)[0] for row in rows}
-    used_symbols={assets[market]['symbol'] for market in used_markets if market in assets}
-    # Reject affected ambiguous symbols even when just one of the aliases appears
-    # in this account: the core profile and repayment asset still lack addresses.
-    relevant_assets={market:asset for market,asset in assets.items() if market in used_markets or asset['symbol'] in used_symbols}
+    # Only markets with a historical position for this user belong to the snapshot.
+    # Including every market that shares a display symbol caused false ambiguity
+    # even when this account used only one underlying. PositionHistory still
+    # rejects true multi-underlying collisions within the selected markets.
+    missing=used_markets-set(assets)
+    if missing:raise ValueError('Missing indexed asset mapping: '+', '.join(sorted(missing)))
+    relevant_assets={market:assets[market] for market in used_markets}
     evidence = None
     if os.environ.get('AAVE_HISTORICAL_EVIDENCE'):
         from analysis.historical_evidence import HistoricalEvidence
