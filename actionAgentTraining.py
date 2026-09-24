@@ -4,6 +4,8 @@ import numpy as np
 import os
 import pickle as pkl
 import glob
+import hashlib
+from utils.recommendation_funding import funding_choice, NoFeasibleAction
 from multiprocessing import Pool, cpu_count, Manager
 from utils.data import get_date_ranges, get_event_df, get_train_set, EVENT_DF_CACHE
 import utils.data
@@ -34,42 +36,9 @@ def get_expected_time_to_event(model, X_test, baseline_meta, max_prediction_days
     This serves as a robust 'Time to Event' proxy for rare events.
     Lower value = Higher Risk (Event expected sooner).
     """
-    times = baseline_meta["times"]
-    cum_hazards = baseline_meta["cum_hazards"]
-    max_t = baseline_meta["max_time"]
-    final_rate = baseline_meta["final_rate"]
-    log_shift = baseline_meta["log_shift"]
-
-    # 1. Define a standard window for probability estimation (e.g., 7 days)
-    # This acts as our "instantaneous" risk measurement window.
-    window_seconds = 7 * 24 * 3600
-
-    # 2. Get Baseline Hazard for this window
-    if window_seconds <= max_t:
-        idx = np.searchsorted(times, window_seconds) - 1
-        idx = max(0, min(idx, len(cum_hazards) - 1))
-        h0 = cum_hazards[idx]
-    else:
-        excess = window_seconds - max_t
-        h0 = cum_hazards[-1] + (excess * final_rate)
-
-    # 3. Calculate Risk Probability for each user
-    log_margin = model.predict(X_test, output_margin=True)
-    relative_risk = np.exp(np.clip(log_margin - log_shift, -20, 20))
-
-    # Prob = 1 - exp(-H0 * RR)
-    # We clip the exponent to avoid overflow/underflow
-    exponent = -h0 * relative_risk
-    exponent = np.clip(exponent, -50, 0)
-    probability = 1.0 - np.exp(exponent)
-
-    # 4. Calculate Return Period: Window / Probability
-    # If prob is 1.0, time is Window.
-    # If prob is tiny, time is huge.
-    # Add epsilon to prob to prevent division by zero.
-    probability = np.maximum(probability, 1e-12)
-
-    return window_seconds / probability
+    from revision_eval.probability import horizon_probability
+    probability = horizon_probability(model.predict(X_test, output_margin=True), baseline_meta)
+    return 604800. / np.maximum(probability, 1e-12)
 
 
 def get_user_history(user_id: str, up_to_timestamp: int) -> pd.DataFrame:
@@ -171,33 +140,14 @@ def calc_predictions(index_event_value, group, results, model_date, user_history
 
 
 def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
-    results_cache_file = os.path.join(
-        RESULTS_CACHE_DIR,
-        f"{row['user']}_{row['timestamp']}_{row['amount']}.pkl",
-    )
-    # If exact cache exists for this amount, return it immediately
+    # Include the complete feature row: reserve/type changes at the same amount
+    # must not reuse another candidate's predictions. Run directories bind models/data.
+    row_digest = hashlib.sha256(pkl.dumps(row.to_dict(), protocol=4)).hexdigest()
+    results_cache_file = os.path.join(RESULTS_CACHE_DIR, row_digest + ".pkl")
     if os.path.exists(results_cache_file):
         with open(results_cache_file, "rb") as f:
             return pkl.load(f)
-
-    # Otherwise, check for any cache for the same user+timestamp (different amount).
-    # If found, we'll reuse that cache and only recompute the predictions for
-    # the most-recent transaction (the row passed in), then save a new cache
-    # file for the current amount.
-    pattern = os.path.join(RESULTS_CACHE_DIR, f"{row['user']}_{row['timestamp']}_*.pkl")
-    matches = glob.glob(pattern)
     cached_results = None
-    if matches:
-        for m in matches:
-            try:
-                with open(m, "rb") as f:
-                    cached_results = pkl.load(f)
-                logger.debug("Loaded alternative cache %s for user/timestamp", m)
-            except Exception:
-                continue
-            else:
-
-                break
 
     # Build cache-aware, batched prediction: group history rows by Index Event
     # If we loaded an alternative cache file above, start from that and only
@@ -217,8 +167,15 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
 
     model_date = dates[dates <= pd.to_datetime(row["timestamp"], unit="s")].max()
 
+    # Only the unchanged historical prefix may be reused across candidate actions.
+    history_key = hashlib.sha256(pkl.dumps((row["user"], row["timestamp"], str(model_date)), protocol=4)).hexdigest()
+    history_cache_file = os.path.join(RESULTS_CACHE_DIR, "history_" + history_key + ".pkl")
+    if os.path.exists(history_cache_file):
+        with open(history_cache_file, "rb") as f:
+            cached_results = pkl.load(f)
     if cached_results is not None:
         results = cached_results
+        results[int(row["timestamp"])] = {}
         calc_predictions(
             row["Index Event"],
             user_history.iloc[[-1]],
@@ -245,6 +202,10 @@ def get_transaction_history_predictions(row: pd.Series) -> pd.DataFrame:
             calc_predictions(
                 index_event_value, group, results, model_date, user_history
             )
+
+    if cached_results is None:
+        with open(history_cache_file, "wb") as f:
+            pkl.dump({ts:values for ts,values in results.items() if ts != int(row["timestamp"])}, f)
 
     with open(
         results_cache_file,
@@ -549,72 +510,26 @@ def generate_next_transaction(
 
 
 def optimize_recommendation(row: pd.Series, recommended_action: str):
-    min_recommendation = MIN_RECOMMENDATION_AMOUNT
-    max_recommendation = 100000
-
     sample_action = generate_next_transaction(row, recommended_action)
-    return_values = get_limited_user_profile(sample_action, return_extras=True)
-    reserve = None
-    if return_values is not None:
-        (
-            user_profile,
-            _,
-            _,
-            _,
-            _,
-            lookahead_seconds,
-        ) = return_values
-        simulation_results = get_simulation_outcome(
-            sample_action,
-            "without",
-            profile=user_profile,
-            lookahead_seconds=lookahead_seconds,
-            output_file=logger.handlers[0].baseFilename,
-        )
-        value_pairs = [
-            (reserve, amount * get_price_history_value(reserve, row["timestamp"]))
-            for reserve, amount in simulation_results["final_state"][
-                "wallet_balances"
-            ].items()
-        ]
-        reserve = max(value_pairs, key=lambda value_pair: value_pair[1])[0]
-        max_recommendation = simulation_results["final_state"]["wallet_balances"][
-            reserve
-        ]
-        min_recommendation = min(
-            max(MIN_RECOMMENDATION_AMOUNT, max_recommendation / (2 * 6)),
-            max_recommendation,
-        )
-
-    new_action = generate_next_transaction(
-        row,
-        recommended_action,
-        amount=min_recommendation,
-        reserve=reserve,
+    values = get_limited_user_profile(sample_action, return_extras=True)
+    if values is None:
+        raise NoFeasibleAction("No historical profile for funding reconstruction")
+    user_profile, _, _, _, _, lookahead_seconds = values
+    results = get_simulation_outcome(
+        sample_action, "without", profile=user_profile,
+        lookahead_seconds=lookahead_seconds,
+        output_file=logger.handlers[0].baseFilename,
     )
-
-    while (
-        new_action["amount"] < max_recommendation
-        and determine_liquidation_risk(new_action)[0]
-    ):
+    reserve, minimum, maximum = funding_choice(
+        results.get("checkpoint_state"), recommended_action, row["timestamp"],
+        lambda symbol: get_price_history_value(symbol, row["timestamp"]),
+        MIN_RECOMMENDATION_AMOUNT,
+    )
+    new_action = generate_next_transaction(row, recommended_action, amount=minimum, reserve=reserve)
+    while new_action["amount"] < maximum and determine_liquidation_risk(new_action)[0]:
         new_action = generate_next_transaction(
-            row,
-            recommended_action,
-            amount=min(max_recommendation, new_action["amount"] * 2),
-            reserve=reserve,
-        )
-        logger.info("Increased amount to: %s", new_action["amount"])
-
-    # Final check: if recommendation would create dust, return None or mark as invalid
-    if return_values is not None and would_create_dust_position(
-        new_action, simulation_results
-    ):
-        new_action = generate_next_transaction(
-            row,
-            recommended_action,
-            amount=max_recommendation,
-            reserve=reserve,
-        )
+            row, recommended_action, amount=min(maximum, new_action["amount"] * 2), reserve=reserve)
+    # No future-state wallet selection, cross-asset repayment or dust upsizing.
     return new_action
 
 
@@ -636,16 +551,24 @@ def recommend_action(row: pd.Series):
         "Repay"
         if (
             most_recent_predictions["Deposit"] is None
-            or most_recent_predictions["Repay"] >= most_recent_predictions["Deposit"]
+            or (most_recent_predictions["Repay"] is not None
+                and most_recent_predictions["Repay"] >= most_recent_predictions["Deposit"])
         )
         and is_at_risk
         else "Deposit"
     )
 
-    # Optimize recommendation with dust filtering
-    optimized_action = optimize_recommendation(row, recommended_action)
+    abstention = None
+    try:
+        optimized_action = optimize_recommendation(row, recommended_action)
+    except NoFeasibleAction as exc:
+        abstention = str(exc)
+        optimized_action = generate_next_transaction(row, "Deposit", amount=0)
+        optimized_action["abstained"] = True
+        optimized_action["abstention_reason"] = abstention
 
     return optimized_action, {
+        "abstention_reason": abstention,
         "is_at_risk": is_at_risk,
         "is_at_immediate_risk": is_at_immediate_risk,
         "most_recent_predictions": most_recent_predictions,

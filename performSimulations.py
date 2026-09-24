@@ -1015,6 +1015,9 @@ def process_recommendation(item):
         # Normalize the recommendation format
         recommendation, liquidation_info = normalize_recommendation(item)
 
+        if recommendation.get("generation_error"):
+            return {"success": False, "error": "Recommendation generation failed: " + recommendation["generation_error"], "stats_updates": {}}
+
         # Validate required fields
         if not isinstance(recommendation, dict):
             logger.error(
@@ -1229,9 +1232,10 @@ def process_recommendation(item):
             }
         # logger.debug("Checkpoint 8")
 
-        recommendation = update_recommendation_if_necessary(
-            recommendation, results_without_recommendation
-        )
+        if not recommendation.get("abstained", False):
+            recommendation = update_recommendation_if_necessary(
+                recommendation, results_without_recommendation
+            )
         # logger.debug("Checkpoint 9")
 
         if recommendation is None:
@@ -1250,27 +1254,28 @@ def process_recommendation(item):
         # This simulates: "What happens if user takes the recommendation?"
         try:
             user_profile_with = copy.deepcopy(user_profile)
-            recommended_transaction = local_user_profile_generator._row_to_transaction(
-                recommendation
-            )
-            if recommended_transaction is None:
-                logger.warning(
-                    f"Failed to convert recommendation to transaction for user {user}"
+            if not recommendation.get("abstained", False):
+                recommended_transaction = local_user_profile_generator._row_to_transaction(
+                    recommendation
                 )
-                return {
-                    "success": False,
-                    "error": "Failed to convert recommendation to transaction",
-                    "stats_updates": {},
-                }
-
-            # Ensure the recommended transaction has the correct timestamp
-            # It should be at the recommendation time, or slightly after the last historical transaction
-            recommended_transaction["timestamp"] = recommendation_timestamp
-
-            # Insert the recommendation transaction in the correct chronological position
-            # Since transactions are sorted by timestamp in run_simulation, we just need to append
-            # and ensure it's at the right time
-            user_profile_with["transactions"].append(recommended_transaction)
+                if recommended_transaction is None:
+                    logger.warning(
+                        f"Failed to convert recommendation to transaction for user {user}"
+                    )
+                    return {
+                        "success": False,
+                        "error": "Failed to convert recommendation to transaction",
+                        "stats_updates": {},
+                    }
+    
+                # Ensure the recommended transaction has the correct timestamp
+                # It should be at the recommendation time, or slightly after the last historical transaction
+                recommended_transaction["timestamp"] = recommendation_timestamp
+    
+                # Insert the recommendation transaction in the correct chronological position
+                # Since transactions are sorted by timestamp in run_simulation, we just need to append
+                # and ensure it's at the right time
+                user_profile_with["transactions"].append(recommended_transaction)
 
             # Note: run_simulation will sort by timestamp, so the recommendation will be executed
             # after historical transactions and before any future transactions we might add
@@ -1290,6 +1295,8 @@ def process_recommendation(item):
         lookahead_seconds_for_recommendation = max(
             1, lookahead_seconds - (recommendation_timestamp - cutoff_timestamp) * 2
         )
+        if recommendation.get("abstained", False):
+            lookahead_seconds_for_recommendation = lookahead_seconds
         try:
             results_with_recommendation = get_simulation_outcome(
                 recommendation,

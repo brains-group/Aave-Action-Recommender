@@ -4,9 +4,9 @@ This repository contains the Aave Action Recommender system, which depends on th
 
 ## Git Submodule
 
-This repository uses **Aave-Simulator** as a Git submodule. The submodule is located in the `Aave-Simulator/` directory.
+This repository uses **Aave-Simulator** and **Aave-Data-Pipeline** as Git submodules.
 
-For detailed information on working with the submodule, including cloning, updating, and troubleshooting, see [docs/GIT_SUBMODULE.md](docs/GIT_SUBMODULE.md).
+Initialize both `Aave-Simulator` and `Aave-Data-Pipeline` after cloning with `git -c protocol.file.allow=always submodule update --init --recursive`. The local pipeline submodule URL must be available on the machine or replaced with an authorized remote.
 
 ## Setup
 

@@ -1,0 +1,7 @@
+{
+  "CACHE_DIR": "./cache",
+  "LOG_DIR": "./log",
+  "TRANSACTIONS_PATH": "/home/spadef/data/craft-soc/data",
+  "USERS_PATH": "/home/spadef/data/craft-soc/data",
+  "AAVE_MARKET": "polygon"
+}

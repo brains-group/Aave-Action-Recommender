@@ -42,6 +42,9 @@ def preprocess(
     target_columns = [LABEL_TIME, LABEL_EVENT]
     cols_to_drop = target_columns + [
         "id",
+        "observation_id",
+        "outcome_id",
+        "split",
         "user",
         "pool",
         "Index Event",
@@ -291,10 +294,15 @@ def get_model_for_pair_and_date(
         if os.path.exists(baseline_path):
             with open(baseline_path, "rb") as f:
                 baseline_data = pkl.load(f)
+            if os.environ.get("AAVE_FROZEN_MODELS") == "1":
+                model.set_param({"device": "cpu", "nthread": 1})
             MODELS_CACHE[model_key] = (model, baseline_data)
             return model, baseline_data
         else:
             needToTrainAndSaveModel = False
+
+    if os.environ.get("AAVE_FROZEN_MODELS") == "1":
+        raise FileNotFoundError(f"Frozen model/baseline missing: {model_path}; training is not allowed on inference-only history")
 
     dataset_path = os.path.join(index_event, outcome_event)
 

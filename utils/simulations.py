@@ -25,10 +25,33 @@ from tools.run_single_simulation import run_simulation
 from simulator.utils import get_price_history
 
 
+from functools import lru_cache
+@lru_cache(maxsize=1)
+def simulation_code_identity():
+    import hashlib
+    root = Path(aave_sim_path).resolve()
+    digest = hashlib.sha256()
+    for directory in ['simulator', 'tools', 'analysis', 'market']:
+        for source in sorted((root / directory).rglob('*.py')):
+            digest.update(str(source.relative_to(root)).encode()); digest.update(source.read_bytes())
+    for source in sorted(Path(__file__).parent.glob("*.py")):
+        digest.update(source.name.encode()); digest.update(source.read_bytes())
+    registry = root / 'analysis/polygon_asset_registry.json'
+    if registry.exists(): digest.update(registry.read_bytes())
+    price = root / 'data/reserves/price_history.json'
+    with price.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024*1024), b''): digest.update(chunk)
+    return 'code_' + digest.hexdigest()[:20]
+
+
 def get_simulation_outcome(recommendation, suffix, **passed_args):
     """Load cached simulation results or compute and cache them."""
     key = f"{recommendation['user']}_{int(recommendation.get('timestamp', 0))}_{suffix}"
-    results_cache_file = Path(SIMULATION_RESULTS_CACHE_DIR) / f"{key}.pkl"
+    # New logic/configuration must not consume paper-era simulation caches.
+    import hashlib
+    canonical = pkl.dumps({k:v for k,v in passed_args.items() if k != "output_file"}, protocol=4)
+    fingerprint = hashlib.sha256(canonical).hexdigest()[:16]
+    results_cache_file = Path(SIMULATION_RESULTS_CACHE_DIR) / simulation_code_identity() / fingerprint / f"{key}.pkl"
     # logger.debug("Checkpoint 7.6")
 
     # Try to load from cache
@@ -46,7 +69,7 @@ def get_simulation_outcome(recommendation, suffix, **passed_args):
 
     # Save to cache (best effort)
     try:
-        Path(SIMULATION_RESULTS_CACHE_DIR).mkdir(parents=True, exist_ok=True)
+        results_cache_file.parent.mkdir(parents=True, exist_ok=True)
         with open(results_cache_file, "wb") as f:
             pkl.dump(results, f)
     except Exception as e:
@@ -85,51 +108,25 @@ def would_create_dust_position(recommendation, results_without_recommendation):
 
 
 def update_recommendation_if_necessary(recommendation, results_without_recommendation):
-    if recommendation["Index Event"] != "repay":
-        return recommendation
+    """Bound repayment to same-asset funds/debt in the pre-projection checkpoint.
 
-    # Get symbol from recommendation - try 'symbol' first, then 'reserve' as fallback
-    symbol = recommendation.get("symbol") or recommendation.get("reserve")
-    if not symbol:
-        logger.warning(
-            f"Recommendation missing 'symbol' and 'reserve' fields for repay action. "
-            f"Available keys: {list(recommendation.keys())}. Skipping update."
-        )
+    No conversion, wallet sweep, future-state funding, or automatic dust upsizing.
+    Inferred initial wallets remain an explicit retrospective assumption.
+    """
+    if str(recommendation["Index Event"]).lower() != "repay":
         return recommendation
-
-    # walletSymbolAmount = wallet_balances.get(symbol, 0)
-    # if walletSymbolAmount < recommendation['amount']:
-    #     updateAmountOrUSD(recommendation, amount = walletSymbolAmount)
-    total_debt_usd = results_without_recommendation["final_state"]["total_debt_usd"]
-    amount_usd = recommendation["amountUSD"]
-    estimated_remaining_debt = max(0, total_debt_usd - amount_usd)
-    # if not (
-    #     estimated_remaining_debt > 0
-    #     and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD
-    # ):
-    #     return recommendation
-    # elif (
-    #     recommendation["Index Event"] != "repay"
-    # ):  # Comment out these if and return statements for potential performance increase for deposit recommendations
-    #     return None
-    if recommendation["Index Event"] != "repay" and (
-        estimated_remaining_debt > 0
-        and estimated_remaining_debt < MIN_RECOMMENDATION_DEBT_USD
-    ):  # Comment out these if and return statements for potential performance increase for deposit recommendations
+    state = results_without_recommendation.get("checkpoint_state")
+    if state is None or state["timestamp"] > recommendation["timestamp"]:
+        logger.warning("Repayment requires an available pre-recommendation checkpoint state")
         return None
-
-    wallet_balances = results_without_recommendation["final_state"]["wallet_balances"]
-    maxWalletSymbol = max(wallet_balances, key=wallet_balances.get)
-    maxWalletValue = wallet_balances.get(maxWalletSymbol, 0)
-
-    recommendation["symbol"] = recommendation["reserve"] = maxWalletSymbol
-    updateAmountOrUSD(recommendation, amount=maxWalletValue)
-
-    # updateAmountOrUSD(recommendation, amountUSD = total_debt_usd*1.01)
-
-    # if walletSymbolAmount < recommendation['amount']:
-    #     updateAmountOrUSD(recommendation, amount = walletSymbolAmount)
-
+    symbol = recommendation.get("symbol") or recommendation.get("reserve")
+    amount = min(float(recommendation["amount"]),
+                 state["wallet_balances"].get(symbol, 0),
+                 state["debt_balances"].get(symbol, 0))
+    if not np.isfinite(amount) or amount <= 0:
+        return None
+    recommendation = recommendation.copy()
+    updateAmountOrUSD(recommendation, amount=amount)
     return recommendation
 
 
@@ -169,6 +166,9 @@ def get_limited_user_profile(recommendation, return_extras=False):
     # (No need to copy - we'll create a deepcopy later for "with" profile)
     user_profile["transactions"] = historical_transactions
 
+    from utils.indexed_checkpoint import attach_checkpoint
+    attach_checkpoint(user_profile)
+
     if return_extras:
         if future_transactions:
             future_transactions.sort(key=lambda x: x.get("timestamp", 0))
@@ -205,7 +205,8 @@ def get_price_history_value(symbol, timestamp):
     if symbol not in _price_timestamps_cache:
         _price_timestamps_cache[symbol] = sorted(symbol_price_history.keys())
     sorted_timestamps = _price_timestamps_cache[symbol]
-    closest_timestamp = sorted_timestamps[
-        bisect.bisect_left(sorted_timestamps, timestamp, hi=len(sorted_timestamps) - 1)
-    ]
+    index = bisect.bisect_right(sorted_timestamps, timestamp) - 1
+    if index < 0:
+        raise ValueError("No price observation at or before decision time")
+    closest_timestamp = sorted_timestamps[index]
     return symbol_price_history[closest_timestamp]
