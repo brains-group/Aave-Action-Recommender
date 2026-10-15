@@ -107,7 +107,7 @@ def main():
      new=dict(rec)
      for k in ['id','transactionHash','blockNumber','logIndex','pool','asset_address','on_behalf_of','payer','recipient','rate_mode','generation_error']:new.pop(k,None)
      new.update(case_id=case_id,abstained=proposal['action'] is None)
-     new['Index Event']=(proposal['action'] or 'Deposit').lower();new['amount']=proposal.get('amount',0);new['amountUSD']=proposal['capital_usd']
+     new['Index Event']=(proposal['action'] or 'Deposit').lower();new['type']=new['Index Event'];new['amount']=proposal.get('amount',0);new['amountUSD']=proposal['capital_usd']
      if proposal['action']:
       new['reserve']=proposal['asset'];new['symbol']=proposal['asset'];new['priceInUSD']=state['assets'][proposal['asset']]['price_usd']
      import math
@@ -139,7 +139,9 @@ def main():
     if any((folder/n).exists() for n in ['complete.json','unavailable.json','error.json']):continue
     if a.generate_only and (folder/'recommendations.pkl').exists():continue
     if not (a.parent_run/'cases'/f'{i:05d}-{variant}.json').exists():pending+=1;continue
+    save(run/'active.json',dict(index=i,variant=variant,started_epoch=time.time(),pid=os.getpid()))
     with (run/'logs/worker.log').open('a') as log,contextlib.redirect_stdout(log),contextlib.redirect_stderr(log):task(i,variant)
+    (run/'active.json').unlink(missing_ok=True)
     ready+=1
     save(run/'progress.json',dict(last_index=i,variant=variant,seconds=time.time()-started,cache=stats,completed=len(list((run/'cases').glob('*/complete.json'))),generated=len(list((run/'cases').glob('*/recommendations.pkl'))),errors=len(list((run/'cases').glob('*/error.json'))),unavailable=len(list((run/'cases').glob('*/unavailable.json'))),total=count*2))
   for variant in ['core','indexed']:
